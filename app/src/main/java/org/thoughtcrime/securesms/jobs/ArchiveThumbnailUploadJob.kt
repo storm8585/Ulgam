@@ -1,0 +1,426 @@
+/*
+ * Copyright 2024 Signal Messenger, LLC
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+package org.thoughtcrime.securesms.jobs
+
+import arrow.core.Either
+import org.signal.core.models.database.AttachmentId
+import org.signal.core.util.Util
+import org.signal.core.util.logging.Log
+import org.signal.glide.decryptableuri.DecryptableUri
+import org.signal.libsignal.net.RequestResult
+import org.signal.network.api.AttachmentUploadResult
+import org.signal.network.api.CdnApi
+import org.signal.network.service.ArchiveError
+import org.thoughtcrime.securesms.attachments.AttachmentUploadUtil
+import org.thoughtcrime.securesms.attachments.DatabaseAttachment
+import org.thoughtcrime.securesms.backup.v2.ArchiveDatabaseExecutor
+import org.thoughtcrime.securesms.backup.v2.UploadedThumbnailInfo
+import org.thoughtcrime.securesms.backup.v2.hadIntegrityCheckPerformed
+import org.thoughtcrime.securesms.backup.v2.requireThumbnailMediaName
+import org.thoughtcrime.securesms.database.AttachmentTable
+import org.thoughtcrime.securesms.database.SignalDatabase
+import org.thoughtcrime.securesms.dependencies.AppDependencies
+import org.thoughtcrime.securesms.jobmanager.CoroutineJob
+import org.thoughtcrime.securesms.jobmanager.Job
+import org.thoughtcrime.securesms.jobmanager.impl.BackupMessagesConstraint
+import org.thoughtcrime.securesms.jobmanager.impl.NoRemoteArchiveGarbageCollectionPendingConstraint
+import org.thoughtcrime.securesms.jobmanager.persistence.JobSpec
+import org.thoughtcrime.securesms.jobs.protos.ArchiveThumbnailUploadJobData
+import org.thoughtcrime.securesms.keyvalue.SignalStore
+import org.thoughtcrime.securesms.net.SignalNetwork
+import org.thoughtcrime.securesms.util.ImageCompressionUtil
+import org.thoughtcrime.securesms.util.MediaUtil
+import org.thoughtcrime.securesms.util.RemoteConfig
+import org.whispersystems.signalservice.api.crypto.AttachmentCipherStreamUtil
+import org.whispersystems.signalservice.api.messages.SignalServiceAttachment
+import org.whispersystems.signalservice.api.messages.SignalServiceAttachmentStream
+import org.whispersystems.signalservice.internal.crypto.PaddingInputStream
+import org.whispersystems.signalservice.internal.push.AttachmentUploadForm
+import java.io.ByteArrayInputStream
+import java.io.IOException
+import kotlin.math.floor
+import kotlin.math.max
+import kotlin.time.Duration.Companion.days
+
+/**
+ * Uploads a thumbnail for the specified attachment to the archive service, if possible.
+ */
+class ArchiveThumbnailUploadJob private constructor(
+  params: Parameters,
+  val attachmentId: AttachmentId
+) : CoroutineJob(params) {
+
+  companion object {
+    const val KEY = "ArchiveThumbnailUploadJob"
+    private val TAG = Log.tag(ArchiveThumbnailUploadJob::class.java)
+
+    private const val STARTING_IMAGE_QUALITY = 75f
+    private const val MINIMUM_IMAGE_QUALITY = 10f
+    private const val MAX_PIXEL_DIMENSION = 256
+    private const val ADDITIONAL_QUALITY_DECREASE = 10f
+
+    /** A set of possible queues this job may use. The number of queues determines the parallelism. */
+    val QUEUES = setOf(
+      "ArchiveThumbnailUploadJob_1",
+      "ArchiveThumbnailUploadJob_2",
+      "ArchiveThumbnailUploadJob_3",
+      "ArchiveThumbnailUploadJob_4"
+    )
+
+    fun enqueueIfNecessary(attachmentId: AttachmentId) {
+      if (SignalStore.backup.backsUpMedia) {
+        AppDependencies.jobManager.add(ArchiveThumbnailUploadJob(attachmentId))
+      }
+    }
+
+    fun JobSpec.isForArchiveThumbnailUploadJob(attachmentId: AttachmentId): Boolean {
+      return this.factoryKey == KEY && this.serializedData?.let { ArchiveThumbnailUploadJobData.ADAPTER.decode(it).attachmentId } == attachmentId.id
+    }
+  }
+
+  constructor(attachmentId: AttachmentId) : this(
+    Parameters.Builder()
+      .setQueue(QUEUES.random())
+      .addConstraint(BackupMessagesConstraint.KEY)
+      .addConstraint(NoRemoteArchiveGarbageCollectionPendingConstraint.KEY)
+      .setLifespan(1.days.inWholeMilliseconds)
+      .setMaxAttempts(Parameters.UNLIMITED)
+      .setGlobalPriority(Parameters.PRIORITY_LOWER)
+      .build(),
+    attachmentId
+  )
+
+  override fun serialize(): ByteArray {
+    return ArchiveThumbnailUploadJobData(
+      attachmentId = attachmentId.id
+    ).encode()
+  }
+
+  override fun getFactoryKey(): String = KEY
+
+  override fun onAdded() {
+    val transferStatus = SignalDatabase.attachments.getArchiveThumbnailTransferState(attachmentId) ?: return
+
+    if (transferStatus == AttachmentTable.ArchiveTransferState.NONE) {
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.UPLOAD_IN_PROGRESS)
+      }
+    }
+  }
+
+  override suspend fun doRun(): Result {
+    val attachment = SignalDatabase.attachments.getAttachment(attachmentId)
+    if (attachment == null) {
+      Log.w(TAG, "$attachmentId not found, assuming this job is no longer necessary.")
+      return Result.success()
+    }
+
+    if (!MediaUtil.isImageOrVideoType(attachment.contentType)) {
+      Log.w(TAG, "$attachmentId isn't visual media (contentType = ${attachment.contentType}). Skipping.")
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.NONE)
+      }
+      return Result.success()
+    }
+
+    if (attachment.quote) {
+      Log.w(TAG, "$attachmentId is a quote. Skipping.")
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.NONE)
+      }
+      return Result.success()
+    }
+
+    if (attachment.dataHash == null || attachment.remoteKey == null) {
+      Log.w(TAG, "$attachmentId is missing necessary ingredients for a mediaName!")
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.NONE)
+      }
+      return Result.success()
+    }
+
+    if (!attachment.hadIntegrityCheckPerformed()) {
+      Log.w(TAG, "$attachmentId has no integrity check! Cannot proceed.")
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.NONE)
+      }
+      return Result.success()
+    }
+
+    if (SignalDatabase.messages.isStory(attachment.mmsId)) {
+      Log.w(TAG, "$attachmentId is a story. Skipping.")
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.NONE)
+      }
+      return Result.success()
+    }
+
+    val alreadyArchived = SignalDatabase.attachments.getArchiveThumbnailTransferState(attachmentId) == AttachmentTable.ArchiveTransferState.FINISHED
+
+    // Attachments sharing a mediaName are enqueued individually, but finalizing fills in the whole group, so by now a sibling may have done the work for us.
+    if (alreadyArchived && SignalDatabase.attachments.hasThumbnailFile(attachmentId)) {
+      Log.i(TAG, "[$attachmentId] Thumbnail is already archived and present locally. Nothing to do.")
+      return Result.success()
+    }
+
+    val thumbnailResult = generateThumbnailIfPossible(attachment)
+    if (thumbnailResult == null) {
+      Log.w(TAG, "Unable to generate a thumbnail result for $attachmentId")
+      ArchiveDatabaseExecutor.runBlocking {
+        if (alreadyArchived) {
+          SignalDatabase.attachments.markThumbnailPermanentlyFailedIfUnrestorable(attachmentId)
+        } else {
+          SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.PERMANENT_FAILURE)
+        }
+      }
+      return Result.success()
+    }
+
+    if (alreadyArchived) {
+      Log.i(TAG, "[$attachmentId] Thumbnail is already on the archive CDN. Saving the generated copy locally rather than uploading it again.")
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.finalizeAttachmentThumbnailAfterUpload(
+          attachmentId = attachmentId,
+          attachmentPlaintextHash = attachment.dataHash,
+          attachmentRemoteKey = attachment.remoteKey,
+          data = thumbnailResult.data
+        )
+      }
+      return Result.success()
+    }
+
+    if (isCanceled) {
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.TEMPORARY_FAILURE)
+      }
+      return Result.failure()
+    }
+
+    val ciphertextLength = AttachmentCipherStreamUtil.getCiphertextLength(PaddingInputStream.getPaddedSize(thumbnailResult.data.size.toLong()))
+
+    val form: AttachmentUploadForm = when (val formResult = SignalNetwork.archiveService.getMediaUploadForm(ciphertextLength)) {
+      is Either.Right -> formResult.value
+      is Either.Left -> return when (val error = formResult.value) {
+        is ArchiveError.ApplicationError -> {
+          Log.w(TAG, "Failed to get upload form due to an application error. Retrying.", error.exception)
+          Result.retry(defaultBackoff())
+        }
+        is ArchiveError.NetworkError -> {
+          Log.w(TAG, "Encountered a transient network error when getting upload form. Retrying.")
+          Result.retry(defaultBackoff())
+        }
+        is ArchiveError.CredentialError.RateLimited -> {
+          Log.w(TAG, "Rate limited when getting upload form.")
+          Result.retry(error.retryAfter?.inWholeMilliseconds ?: defaultBackoff())
+        }
+        is ArchiveError.UploadFormError.TooLarge -> {
+          Log.w(TAG, "Thumbnail is too large to upload to the archive. Marking as a permanent failure.")
+          ArchiveDatabaseExecutor.runBlocking {
+            SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.PERMANENT_FAILURE)
+          }
+          Result.failure()
+        }
+        is ArchiveError.CredentialError.Unauthorized,
+        is ArchiveError.CredentialError.NotFound,
+        is ArchiveError.CredentialError.InvalidRequest,
+        is ArchiveError.CredentialError.ZkVerificationFailed -> {
+          Log.w(TAG, "Failed to get upload form: ${error::class.simpleName}")
+          Result.retry(defaultBackoff())
+        }
+      }
+    }
+
+    if (isCanceled) {
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.TEMPORARY_FAILURE)
+      }
+      return Result.failure()
+    }
+
+    val mediaRootBackupKey = SignalStore.backup.mediaRootBackupKey
+    val key = mediaRootBackupKey.deriveThumbnailTransitKey(attachment.requireThumbnailMediaName())
+    val iv = Util.getSecretBytes(16)
+
+    val checksumSha256 = ByteArrayInputStream(thumbnailResult.data).use { stream ->
+      AttachmentUploadUtil.computeCiphertextChecksum(key, iv, stream, thumbnailResult.data.size.toLong())
+    }
+
+    val attachmentPointer = try {
+      val uploadResult: AttachmentUploadResult = buildSignalServiceAttachmentStream(thumbnailResult).use { stream ->
+        when (val result = SignalNetwork.cdnService.uploadAttachment(form, key, iv, checksumSha256, stream)) {
+          is RequestResult.Success -> result.result
+          is RequestResult.ApplicationError -> throw result.cause
+          is RequestResult.RetryableNetworkError -> throw result.networkError
+          is RequestResult.NonSuccess -> return when (val error = result.error) {
+            is CdnApi.UploadError.RateLimited -> {
+              Log.w(TAG, "Rate limited when uploading thumbnail.")
+              Result.retry(error.retryAfter?.inWholeMilliseconds ?: defaultBackoff())
+            }
+            is CdnApi.UploadError.TooLarge -> {
+              Log.w(TAG, "Thumbnail is too large to upload to the archive. Marking as a permanent failure.")
+              ArchiveDatabaseExecutor.runBlocking {
+                SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.PERMANENT_FAILURE)
+              }
+              Result.failure()
+            }
+            is CdnApi.UploadError.InvalidRequest,
+            is CdnApi.UploadError.ResumeLocationInvalid,
+            is CdnApi.UploadError.ChecksumMismatch -> {
+              Log.w(TAG, "Failed to upload thumbnail: $error")
+              Result.retry(defaultBackoff())
+            }
+          }
+        }
+      }
+
+      UploadedThumbnailInfo(
+        cdnNumber = uploadResult.cdnNumber,
+        remoteLocation = uploadResult.remoteId.toString(),
+        size = uploadResult.dataSize
+      )
+    } catch (e: IOException) {
+      Log.w(TAG, "Failed to upload thumbnail", e)
+      return Result.retry(defaultBackoff())
+    }
+
+    if (isCanceled) {
+      return Result.failure()
+    }
+
+    val copyResult = SignalNetwork.archiveService.copyToArchive(
+      cdnNumber = attachmentPointer.cdnNumber,
+      remoteLocation = attachmentPointer.remoteLocation,
+      plaintextSize = attachmentPointer.size,
+      mediaName = attachment.requireThumbnailMediaName()
+    )
+
+    return when (copyResult) {
+      is Either.Right -> {
+        // save attachment thumbnail
+        ArchiveDatabaseExecutor.runBlocking {
+          SignalDatabase.attachments.finalizeAttachmentThumbnailAfterUpload(
+            attachmentId = attachmentId,
+            attachmentPlaintextHash = attachment.dataHash,
+            attachmentRemoteKey = attachment.remoteKey,
+            data = thumbnailResult.data
+          )
+
+          Log.d(TAG, "Successfully archived thumbnail for $attachmentId")
+          SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.FINISHED)
+        }
+        Result.success()
+      }
+
+      is Either.Left -> when (val error = copyResult.value) {
+        is ArchiveError.NetworkError -> {
+          Log.w(TAG, "Hit a network error when trying to archive thumbnail for $attachmentId", error.exception)
+          Result.retry(defaultBackoff())
+        }
+
+        is ArchiveError.CredentialError.RateLimited -> {
+          Log.w(TAG, "Rate limited when trying to archive thumbnail for $attachmentId")
+          Result.retry(error.retryAfter?.inWholeMilliseconds ?: defaultBackoff())
+        }
+
+        is ArchiveError.ApplicationError -> {
+          Result.fatalFailure(RuntimeException(error.exception))
+        }
+
+        is ArchiveError.CopyMediaError.OutOfRemoteSpace -> {
+          Log.w(TAG, "Out of remote storage space when trying to archive thumbnail for $attachmentId. Giving up until the next backfill.")
+          Result.failure()
+        }
+
+        is ArchiveError.CopyMediaError.SourceNotFound,
+        is ArchiveError.CopyMediaError.WrongSourceLength,
+        is ArchiveError.CredentialError.Unauthorized,
+        is ArchiveError.CredentialError.NotFound,
+        is ArchiveError.CredentialError.InvalidRequest,
+        is ArchiveError.CredentialError.ZkVerificationFailed -> {
+          Log.w(TAG, "Hit ${error::class.simpleName} when trying to archive thumbnail for $attachmentId")
+          Result.retry(defaultBackoff())
+        }
+      }
+    }
+  }
+
+  override fun onFailure() {
+    if (SignalDatabase.attachments.getArchiveThumbnailTransferState(attachmentId) == AttachmentTable.ArchiveTransferState.FINISHED) {
+      Log.w(TAG, "[$attachmentId] Job didn't finish, but the thumbnail is already archived. Leaving the transfer state alone so we don't re-upload it.")
+      return
+    }
+
+    if (this.isCanceled) {
+      Log.w(TAG, "[$attachmentId] Job was canceled, updating archive thumbnail transfer state to ${AttachmentTable.ArchiveTransferState.NONE}.")
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferState(attachmentId, AttachmentTable.ArchiveTransferState.NONE)
+      }
+    } else {
+      Log.w(TAG, "[$attachmentId] Job failed, updating archive thumbnail transfer state to ${AttachmentTable.ArchiveTransferState.TEMPORARY_FAILURE} (if not already a permanent failure).")
+      ArchiveDatabaseExecutor.runBlocking {
+        SignalDatabase.attachments.setArchiveThumbnailTransferStateFailure(attachmentId, AttachmentTable.ArchiveTransferState.TEMPORARY_FAILURE)
+      }
+    }
+  }
+
+  private fun generateThumbnailIfPossible(attachment: DatabaseAttachment): ImageCompressionUtil.Result? {
+    try {
+      val uri: DecryptableUri = attachment.uri?.let { DecryptableUri(it) } ?: return null
+
+      return if (MediaUtil.isImageType(attachment.contentType)) {
+        compress(uri, attachment.contentType ?: "")
+      } else if (MediaUtil.isVideoType(attachment.contentType)) {
+        MediaUtil.getVideoThumbnail(context, attachment.uri)?.let {
+          compress(uri, attachment.contentType ?: "")
+        }
+      } else {
+        null
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "Failed to generate thumbnail for $attachmentId", e)
+      return null
+    }
+  }
+
+  private fun compress(uri: DecryptableUri, contentType: String): ImageCompressionUtil.Result? {
+    val maxFileSize = RemoteConfig.backupMaxThumbnailFileSize.inWholeBytes.toFloat()
+    var attempts = 0
+    var quality = STARTING_IMAGE_QUALITY
+
+    var result: ImageCompressionUtil.Result? = ImageCompressionUtil.compress(context, contentType, MediaUtil.IMAGE_WEBP, uri, MAX_PIXEL_DIMENSION, quality.toInt())
+
+    while (result != null && result.data.size > maxFileSize && attempts < 5 && quality > MINIMUM_IMAGE_QUALITY) {
+      val maxSizeToActualRatio = maxFileSize / result.data.size.toFloat()
+      val newQuality = quality * maxSizeToActualRatio - ADDITIONAL_QUALITY_DECREASE
+
+      quality = floor(max(MINIMUM_IMAGE_QUALITY, newQuality))
+      result = ImageCompressionUtil.compress(context, contentType, MediaUtil.IMAGE_WEBP, uri, MAX_PIXEL_DIMENSION, quality.toInt())
+      attempts++
+    }
+    return result
+  }
+
+  private fun buildSignalServiceAttachmentStream(result: ImageCompressionUtil.Result): SignalServiceAttachmentStream {
+    return SignalServiceAttachment.newStreamBuilder()
+      .withStream(ByteArrayInputStream(result.data))
+      .withContentType(result.mimeType)
+      .withLength(result.data.size.toLong())
+      .withWidth(result.width)
+      .withHeight(result.height)
+      .withUploadTimestamp(System.currentTimeMillis())
+      .build()
+  }
+
+  class Factory : Job.Factory<ArchiveThumbnailUploadJob> {
+    override fun create(parameters: Parameters, serializedData: ByteArray?): ArchiveThumbnailUploadJob {
+      val data = ArchiveThumbnailUploadJobData.ADAPTER.decode(serializedData!!)
+      return ArchiveThumbnailUploadJob(
+        params = parameters,
+        attachmentId = AttachmentId(data.attachmentId)
+      )
+    }
+  }
+}

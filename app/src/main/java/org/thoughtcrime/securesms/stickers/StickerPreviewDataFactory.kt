@@ -1,0 +1,85 @@
+/*
+ * Copyright 2025 Signal Messenger, LLC
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+package org.thoughtcrime.securesms.stickers
+
+import org.signal.core.models.database.StickerRecord
+import org.thoughtcrime.securesms.database.model.StickerPackRecord
+import org.thoughtcrime.securesms.stickers.manage.StickerPack
+import java.util.UUID
+
+/**
+ * Generates sample sticker data to use in compose UI previews.
+ */
+object StickerPreviewDataFactory {
+  fun stickerPack(
+    packId: String = UUID.randomUUID().toString(),
+    title: String,
+    author: String,
+    isBlessed: Boolean = false,
+    downloadStatus: StickerPack.DownloadStatus = StickerPack.DownloadStatus.NotDownloaded
+  ): StickerPack = StickerPack(
+    record = StickerPackRecord(
+      packId = packId,
+      packKey = "packKey",
+      title = title,
+      author = author,
+      cover = StickerRecord(
+        rowId = 11,
+        packId = packId,
+        packKey = "packKey",
+        stickerId = 111,
+        emoji = "",
+        contentType = "image/webp",
+        size = 1111,
+        isCover = true
+      ),
+      isInstalled = false
+    ),
+    isBlessed = isBlessed,
+    downloadStatus = downloadStatus
+  )
+
+  fun installedPack(
+    packId: String = UUID.randomUUID().toString(),
+    title: String,
+    author: String,
+    isBlessed: Boolean = false
+  ): StickerPack = StickerPack(
+    record = StickerPackRecord(
+      packId = packId,
+      packKey = "packKey",
+      title = title,
+      author = author,
+      cover = StickerRecord(
+        rowId = 11,
+        packId = packId,
+        packKey = "packKey",
+        stickerId = 111,
+        emoji = "",
+        contentType = "image/webp",
+        size = 1111,
+        isCover = true
+      ),
+      isInstalled = true
+    ),
+    isBlessed = isBlessed,
+    downloadStatus = StickerPack.DownloadStatus.Downloaded
+  )
+
+  fun manifestStickers(count: Int): List<StickerManifest.Sticker> = buildList {
+    for (index in 0 until count) {
+      add(
+        StickerManifest.Sticker(
+          "packId-$index",
+          "packKey-$index",
+          index,
+          "😎",
+          "image/webp"
+        )
+      )
+    }
+  }
+}

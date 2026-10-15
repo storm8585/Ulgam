@@ -1,0 +1,844 @@
+/*
+ * Copyright 2024 Signal Messenger, LLC
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+package org.thoughtcrime.securesms.backup.v2.ui.subscription
+
+import android.content.Context
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.annotation.UiContext
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidthIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.dimensionResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import org.signal.core.ui.compose.BottomSheets
+import org.signal.core.ui.compose.Buttons
+import org.signal.core.ui.compose.DayNightPreviews
+import org.signal.core.ui.compose.Dialogs
+import org.signal.core.ui.compose.Previews
+import org.signal.core.ui.compose.Scaffolds
+import org.signal.core.ui.compose.SignalIcons
+import org.signal.core.ui.compose.Snackbars
+import org.signal.core.ui.compose.horizontalGutters
+import org.signal.core.ui.compose.theme.SignalTheme
+import org.signal.core.util.Util
+import org.signal.passwordmanager.CredentialManagerError
+import org.signal.passwordmanager.CredentialManagerResult
+import org.signal.passwordmanager.SignalCredentialManager
+import org.signal.passwordmanager.compose.SaveToPasswordManagerDialog
+import org.thoughtcrime.securesms.R
+import org.thoughtcrime.securesms.backup.v2.ui.warning.ClipStage
+import org.thoughtcrime.securesms.backup.v2.ui.warning.RecoveryKeyWarningSheetContent
+import org.thoughtcrime.securesms.backup.v2.ui.warning.RecoveryKeyWarningSheetEvent
+import org.thoughtcrime.securesms.components.TemporaryScreenshotSecurity
+import org.thoughtcrime.securesms.components.settings.app.backups.remote.BackupKeyCredentialManagerHandler
+import org.thoughtcrime.securesms.components.settings.app.backups.remote.BackupKeySaveState
+import org.thoughtcrime.securesms.fonts.MonoTypeface
+import org.thoughtcrime.securesms.keyvalue.SignalStore
+import org.thoughtcrime.securesms.util.CommunicationActions
+import org.signal.core.ui.R as CoreUiR
+
+@Stable
+sealed interface MessageBackupsKeyRecordMode {
+  data class Next(val onNextClick: () -> Unit) : MessageBackupsKeyRecordMode
+  data class CreateNewKey(
+    val onCreateNewKeyClick: () -> Unit,
+    val onTurnOffAndDownloadClick: () -> Unit,
+    val isOptimizedStorageEnabled: Boolean,
+    val canRotateKey: Boolean,
+    val areBackupsEnabled: Boolean
+  ) : MessageBackupsKeyRecordMode
+  data class Passkey(
+    val onSaveToPasswordManager: () -> Unit,
+    val onSaveManually: () -> Unit,
+    val onSaveSuccessful: () -> Unit
+  ) : MessageBackupsKeyRecordMode
+}
+
+/**
+ * More self-contained version of [MessageBackupsKeyRecordScreen] to try to improve reusability.
+ * This version is not built to be previewed but covers a lot of the repetitive boilerplate seen
+ * elsewhere.
+ */
+@Composable
+fun MessageBackupsKeyRecordScreen(
+  backupKey: String,
+  keySaveState: BackupKeySaveState?,
+  backupKeyCredentialManagerHandler: BackupKeyCredentialManagerHandler,
+  mode: MessageBackupsKeyRecordMode
+) {
+  val context = LocalContext.current
+  val passwordManagerSettingsIntent = remember {
+    SignalCredentialManager.getSettingsIntent(context)
+  }
+  val isGooglePasswordManagerDefault = remember {
+    SignalCredentialManager.isGooglePasswordManagerDefault(context)
+  }
+
+  val onBackPressedDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+
+  MessageBackupsKeyRecordScreen(
+    backupKey = backupKey,
+    keySaveState = keySaveState,
+    canOpenPasswordManagerSettings = passwordManagerSettingsIntent != null,
+    isGooglePasswordManagerDefault = isGooglePasswordManagerDefault,
+    onNavigationClick = { onBackPressedDispatcher?.onBackPressed() },
+    onCopyToClipboardClick = { Util.copyToClipboardSensitive(context, it) },
+    onRequestSaveToPasswordManager = backupKeyCredentialManagerHandler::onBackupKeySaveRequested,
+    onConfirmSaveToPasswordManager = backupKeyCredentialManagerHandler::onBackupKeySaveConfirmed,
+    onSaveToPasswordManagerComplete = backupKeyCredentialManagerHandler::onBackupKeySaveCompleted,
+    mode = mode,
+    onGoToPasswordManagerSettingsClick = { context.startActivity(passwordManagerSettingsIntent) },
+    notifyKeyIsSameAsOnDeviceBackupKey = SignalStore.backup.newLocalBackupsEnabled
+  )
+}
+
+/**
+ * Screen displaying the backup key allowing the user to write it down
+ * or copy it.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MessageBackupsKeyRecordScreen(
+  backupKey: String,
+  keySaveState: BackupKeySaveState?,
+  canOpenPasswordManagerSettings: Boolean,
+  isGooglePasswordManagerDefault: Boolean,
+  onNavigationClick: () -> Unit = {},
+  onCopyToClipboardClick: (String) -> Unit = {},
+  onRequestSaveToPasswordManager: () -> Unit = {},
+  onConfirmSaveToPasswordManager: () -> Unit = {},
+  onSaveToPasswordManagerComplete: (CredentialManagerResult) -> Unit = {},
+  onSaveStateCleared: () -> Unit = {},
+  onGoToPasswordManagerSettingsClick: () -> Unit = {},
+  mode: MessageBackupsKeyRecordMode = MessageBackupsKeyRecordMode.Next(onNextClick = {}),
+  notifyKeyIsSameAsOnDeviceBackupKey: Boolean = false
+) {
+  TemporaryScreenshotSecurity.bind()
+
+  val context = LocalContext.current
+  val coroutineScope = rememberCoroutineScope()
+  val snackbarHostState = remember { SnackbarHostState() }
+  val backupKeyString = remember(backupKey) {
+    backupKey.chunked(4).joinToString("  ")
+  }
+
+  val showAsPasskey = mode is MessageBackupsKeyRecordMode.Passkey
+  var showExpandedPasskey by remember { mutableStateOf(false) }
+
+  if (mode is MessageBackupsKeyRecordMode.Next || mode is MessageBackupsKeyRecordMode.Passkey) {
+    RecordScreenBackHandler()
+  }
+
+  var displayRecoveryKeyCopyWarning by remember { mutableStateOf(false) }
+  if (displayRecoveryKeyCopyWarning) {
+    val context = LocalContext.current
+    val url = stringResource(R.string.recovery_key_phishing_support_url)
+    val events: (RecoveryKeyWarningSheetEvent) -> Unit = {
+      when (it) {
+        RecoveryKeyWarningSheetEvent.GotItClick -> {
+          onCopyToClipboardClick(backupKeyString)
+          displayRecoveryKeyCopyWarning = false
+        }
+        RecoveryKeyWarningSheetEvent.LearnMoreClick -> {
+          CommunicationActions.openBrowserLink(context, url)
+          displayRecoveryKeyCopyWarning = false
+        }
+
+        RecoveryKeyWarningSheetEvent.DoNotShareClick -> error("Not supported")
+        RecoveryKeyWarningSheetEvent.ShareKeyClick -> error("Not supported")
+      }
+    }
+
+    ModalBottomSheet(
+      onDismissRequest = { displayRecoveryKeyCopyWarning = false },
+      dragHandle = { BottomSheets.Handle() },
+      sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+      RecoveryKeyWarningSheetContent(
+        clipStage = ClipStage.COPY,
+        events = events
+      )
+    }
+  }
+
+  var displayKeyVerificationError by remember { mutableStateOf(false) }
+  if (displayKeyVerificationError) {
+    ConfirmationFailureDialog(mode) {
+      displayKeyVerificationError = false
+    }
+  }
+
+  var displayConfirmKey by remember { mutableStateOf(false) }
+  if (displayConfirmKey) {
+    val context = LocalContext.current
+    val successMessage = stringResource(R.string.MessageBackupsKeyRecordScreen__recover_key_confirmed)
+    ModalBottomSheet(
+      sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+      containerColor = SignalTheme.colors.colorSurface1,
+      onDismissRequest = { displayConfirmKey = false }
+    ) {
+      ConfirmRecoveryKeySheet(
+        onConfirm = {
+          coroutineScope.launch {
+            val retrieved = getKeyFromCredentialManager(context)
+            if (retrieved == backupKey) {
+              Toast.makeText(context, successMessage, Toast.LENGTH_SHORT).show()
+              (mode as? MessageBackupsKeyRecordMode.Passkey)?.onSaveSuccessful()
+            } else {
+              displayKeyVerificationError = true
+            }
+          }
+          displayConfirmKey = false
+        },
+        onSeeAgain = { displayConfirmKey = false }
+      )
+    }
+  }
+
+  Scaffolds.Settings(
+    title = "",
+    navigationIcon = SignalIcons.ArrowStart.imageVector,
+    onNavigationClick = onNavigationClick,
+    snackbarHost = { Snackbars.Host(snackbarHostState = snackbarHostState) }
+  ) { paddingValues ->
+    Box(
+      modifier = Modifier
+        .padding(paddingValues)
+        .padding(horizontal = dimensionResource(CoreUiR.dimen.gutter))
+    ) {
+      Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally
+      ) {
+        LazyColumn(
+          horizontalAlignment = Alignment.CenterHorizontally,
+          modifier = Modifier
+            .weight(1f)
+            .testTag("message-backups-key-record-screen-lazy-column")
+        ) {
+          item {
+            Image(
+              imageVector = ImageVector.vectorResource(R.drawable.image_signal_backups_lock),
+              contentDescription = null,
+              modifier = Modifier
+                .padding(top = 24.dp)
+                .size(80.dp)
+            )
+          }
+
+          item {
+            Text(
+              text = if (showAsPasskey) {
+                stringResource(R.string.MessageBackupsKeyRecordScreen__save_your_recovery_key)
+              } else {
+                stringResource(R.string.MessageBackupsKeyRecordScreen__record_your_backup_key)
+              },
+              style = MaterialTheme.typography.headlineMedium,
+              textAlign = TextAlign.Center,
+              modifier = Modifier.padding(top = 16.dp)
+            )
+          }
+
+          item {
+            val text = if (notifyKeyIsSameAsOnDeviceBackupKey) {
+              stringResource(R.string.MessageBackupsKeyRecordScreen__this_key_is_the_same_as_your_on_device_recovery_key)
+            } else if (showAsPasskey) {
+              stringResource(R.string.MessageBackupsKeyRecordScreen__your_recovery_key)
+            } else {
+              stringResource(R.string.MessageBackupsKeyRecordScreen__this_key_is_required_to_recover)
+            }
+
+            Text(
+              text = text,
+              textAlign = TextAlign.Center,
+              style = MaterialTheme.typography.bodyLarge,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              modifier = Modifier.padding(top = 12.dp)
+            )
+          }
+
+          item {
+            AnimatedContent(
+              targetState = showAsPasskey && !showExpandedPasskey,
+              transitionSpec = { fadeIn() togetherWith fadeOut() using SizeTransform(clip = false) },
+              label = "passkey",
+              modifier = Modifier.padding(top = 24.dp, bottom = 16.dp)
+            ) { isCollapsed ->
+              if (isCollapsed) {
+                Box(
+                  contentAlignment = Alignment.CenterEnd,
+                  modifier = Modifier.background(
+                    color = SignalTheme.colors.colorSurface1,
+                    shape = RoundedCornerShape(50.dp)
+                  )
+                ) {
+                  Text(
+                    text = backupKeyString,
+                    maxLines = 1,
+                    style = MaterialTheme.typography.bodyLarge
+                      .copy(
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight(400),
+                        letterSpacing = 1.44.sp,
+                        lineHeight = 36.sp,
+                        textAlign = TextAlign.Center,
+                        fontFamily = MonoTypeface.fontFamily()
+                      ),
+                    modifier = Modifier
+                      .padding(10.dp)
+                      .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                      .drawWithContent {
+                        drawContent()
+                        drawRect(
+                          brush = Brush.horizontalGradient(
+                            0f to Color.Black,
+                            0.75f to Color.Transparent
+                          ),
+                          blendMode = BlendMode.DstIn
+                        )
+                      }
+                  )
+
+                  Row(
+                    modifier = Modifier
+                      .background(
+                        color = SignalTheme.colors.colorSurface1,
+                        shape = RoundedCornerShape(50.dp)
+                      )
+                      .padding(horizontal = 12.dp)
+                      .clickable(onClick = { showExpandedPasskey = true }),
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Icon(
+                      imageVector = ImageVector.vectorResource(R.drawable.symbol_tap_20),
+                      contentDescription = stringResource(R.string.MessageBackupsKeyRecordScreen__see_full_key)
+                    )
+                    Text(
+                      text = stringResource(R.string.MessageBackupsKeyRecordScreen__see_full_key),
+                      style = MaterialTheme.typography.labelMedium,
+                      modifier = Modifier.padding(start = 4.dp, end = 12.dp)
+                    )
+                  }
+                }
+              } else {
+                Box(
+                  modifier = Modifier
+                    .background(
+                      color = SignalTheme.colors.colorSurface1,
+                      shape = RoundedCornerShape(10.dp)
+                    )
+                    .padding(24.dp)
+                ) {
+                  Text(
+                    text = backupKeyString,
+                    style = MaterialTheme.typography.bodyLarge
+                      .copy(
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight(400),
+                        letterSpacing = 1.44.sp,
+                        lineHeight = 36.sp,
+                        textAlign = TextAlign.Center,
+                        fontFamily = MonoTypeface.fontFamily()
+                      )
+                  )
+                }
+              }
+            }
+          }
+
+          if (!showAsPasskey || showExpandedPasskey) {
+            item {
+              Buttons.Small(
+                onClick = {
+                  if (mode is MessageBackupsKeyRecordMode.CreateNewKey) {
+                    displayRecoveryKeyCopyWarning = true
+                  } else {
+                    onCopyToClipboardClick(backupKeyString)
+                  }
+                }
+              ) {
+                Text(
+                  text = stringResource(R.string.MessageBackupsKeyRecordScreen__copy_to_clipboard)
+                )
+              }
+            }
+          }
+
+          if (!showAsPasskey && SignalCredentialManager.isSupported(context)) {
+            item {
+              Buttons.Small(
+                onClick = { onRequestSaveToPasswordManager() }
+              ) {
+                Text(
+                  text = stringResource(R.string.MessageBackupsKeyRecordScreen__save_to_password_manager)
+                )
+              }
+            }
+          }
+        }
+
+        when (mode) {
+          is MessageBackupsKeyRecordMode.Next -> {
+            NextButton(onNextClick = mode.onNextClick)
+          }
+
+          is MessageBackupsKeyRecordMode.CreateNewKey -> {
+            CreateNewKeyButton(mode)
+          }
+
+          is MessageBackupsKeyRecordMode.Passkey -> {
+            SaveButtons(mode)
+          }
+        }
+      }
+
+      when (keySaveState) {
+        is BackupKeySaveState.RequestingConfirmation -> {
+          SaveToPasswordManagerDialog(
+            trustBody = stringResource(R.string.MessageBackupsKeyRecordScreen__confirm_save_to_password_manager_body),
+            isGooglePasswordManagerDefault = isGooglePasswordManagerDefault,
+            onContinue = onConfirmSaveToPasswordManager,
+            onDismiss = { onSaveToPasswordManagerComplete(CredentialManagerResult.UserCanceled) }
+          )
+        }
+
+        is BackupKeySaveState.AwaitingCredentialManager -> {
+          val context = LocalContext.current
+          LaunchedEffect(keySaveState) {
+            val result = saveKeyToCredentialManager(context, backupKey)
+            onSaveToPasswordManagerComplete(result)
+          }
+        }
+
+        is BackupKeySaveState.Success -> {
+          val snackbarMessage = stringResource(R.string.MessageBackupsKeyRecordScreen__save_to_password_manager_success)
+          LaunchedEffect(keySaveState) {
+            if (showAsPasskey) {
+              displayConfirmKey = true
+            } else {
+              snackbarHostState.showSnackbar(snackbarMessage)
+            }
+            onSaveStateCleared()
+          }
+        }
+
+        is BackupKeySaveState.Error -> BackupKeySaveErrorDialog(
+          error = keySaveState,
+          showPasswordManagerSettingsButton = canOpenPasswordManagerSettings,
+          onGoToPasswordManagerSettingsClick = onGoToPasswordManagerSettingsClick,
+          onDismiss = { onSaveToPasswordManagerComplete(CredentialManagerResult.UserCanceled) }
+        )
+
+        null -> Unit
+      }
+    }
+  }
+}
+
+@Composable
+private fun SaveButtons(mode: MessageBackupsKeyRecordMode.Passkey) {
+  Buttons.LargeTonal(
+    onClick = mode.onSaveToPasswordManager
+  ) {
+    Text(text = stringResource(R.string.MessageBackupsKeyRecordScreen__save_to_password_manager))
+  }
+
+  TextButton(
+    onClick = mode.onSaveManually,
+    modifier = Modifier
+      .padding(vertical = 24.dp)
+      .horizontalGutters()
+  ) {
+    Text(text = stringResource(R.string.MessageBackupsKeyRecordScreen__save_key_manually))
+  }
+}
+
+@Composable
+private fun NextButton(onNextClick: () -> Unit) {
+  Box(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(bottom = 24.dp)
+  ) {
+    Buttons.LargeTonal(
+      onClick = onNextClick,
+      modifier = Modifier.align(Alignment.BottomEnd)
+    ) {
+      Text(
+        text = stringResource(R.string.MessageBackupsKeyRecordScreen__next)
+      )
+    }
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CreateNewKeyButton(
+  mode: MessageBackupsKeyRecordMode.CreateNewKey
+) {
+  var displayBottomSheet by remember { mutableStateOf(false) }
+  var displayDownloadMediaDialog by remember { mutableStateOf(false) }
+  var displayKeyLimitDialog by remember { mutableStateOf(false) }
+
+  TextButton(
+    onClick = {
+      if (!mode.canRotateKey) {
+        displayKeyLimitDialog = true
+      } else {
+        displayBottomSheet = true
+      }
+    },
+    modifier = Modifier
+      .padding(bottom = 24.dp)
+      .horizontalGutters()
+      .fillMaxWidth()
+      .requiredWidthIn(min = Dp.Unspecified, max = 264.dp)
+  ) {
+    Text(text = stringResource(R.string.MessageBackupsKeyRecordScreen__create_new_key))
+  }
+
+  if (displayKeyLimitDialog) {
+    KeyLimitExceededDialog(
+      areBackupsEnabled = mode.areBackupsEnabled,
+      onClick = { displayKeyLimitDialog = false }
+    )
+  }
+
+  if (displayDownloadMediaDialog) {
+    DownloadMediaDialog(
+      onTurnOffAndDownloadClick = mode.onTurnOffAndDownloadClick,
+      onCancelClick = { displayDownloadMediaDialog = false }
+    )
+  }
+
+  if (displayBottomSheet) {
+    ModalBottomSheet(
+      onDismissRequest = { displayBottomSheet = false },
+      sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+      CreateNewBackupKeySheetContent(
+        onContinueClick = {
+          if (mode.isOptimizedStorageEnabled) {
+            displayDownloadMediaDialog = true
+          } else {
+            mode.onCreateNewKeyClick()
+          }
+        },
+        onCancelClick = { displayBottomSheet = false }
+      )
+    }
+  }
+}
+
+@Composable
+private fun BackupKeySaveErrorDialog(
+  error: BackupKeySaveState.Error,
+  showPasswordManagerSettingsButton: Boolean,
+  onGoToPasswordManagerSettingsClick: () -> Unit = {},
+  onDismiss: () -> Unit = {}
+) {
+  val title: String
+  val message: String
+  when (error.errorType) {
+    is CredentialManagerError.MissingCredentialManager -> {
+      title = stringResource(R.string.MessageBackupsKeyRecordScreen__cant_save_to_password_manager_title)
+      message = stringResource(R.string.MessageBackupsKeyRecordScreen__missing_password_manager_message)
+    }
+
+    is CredentialManagerError.SavePromptDisabled -> {
+      title = stringResource(R.string.MessageBackupsKeyRecordScreen__cant_save_to_password_manager_title)
+      message = stringResource(R.string.MessageBackupsKeyRecordScreen__password_save_prompt_disabled_message)
+    }
+
+    is CredentialManagerError.Unexpected -> return
+  }
+
+  if (showPasswordManagerSettingsButton) {
+    Dialogs.SimpleAlertDialog(
+      title = title,
+      body = message,
+      confirm = stringResource(R.string.MessageBackupsKeyRecordScreen__go_to_settings),
+      onConfirm = { onGoToPasswordManagerSettingsClick() },
+      dismiss = stringResource(android.R.string.cancel),
+      onDismiss = onDismiss
+    )
+  } else {
+    Dialogs.SimpleMessageDialog(
+      title = title,
+      message = message,
+      dismiss = stringResource(android.R.string.ok),
+      onDismiss = onDismiss
+    )
+  }
+}
+
+@Composable
+private fun RecordScreenBackHandler() {
+  var displayWarningDialog by remember { mutableStateOf(false) }
+  var didConfirmDialog by remember { mutableStateOf(false) }
+  val backPressedDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+
+  BackHandler(enabled = !didConfirmDialog) {
+    displayWarningDialog = true
+  }
+
+  LaunchedEffect(didConfirmDialog, backPressedDispatcher) {
+    if (didConfirmDialog) {
+      backPressedDispatcher?.onBackPressed()
+    }
+  }
+
+  if (displayWarningDialog) {
+    Dialogs.SimpleAlertDialog(
+      title = stringResource(R.string.MessageBackupsKeyRecordScreen__exit_backup_setup),
+      body = stringResource(R.string.MessageBackupsKeyRecordScreen__you_have_not_finished_setting_up_backups),
+      confirm = stringResource(R.string.MessageBackupsKeyRecordScreen__exit_backup_setup_confirm),
+      dismiss = stringResource(android.R.string.cancel),
+      onConfirm = {
+        didConfirmDialog = true
+      },
+      onDismiss = {
+        displayWarningDialog = false
+      }
+    )
+  }
+}
+
+@Composable
+private fun ColumnScope.CreateNewBackupKeySheetContent(
+  onContinueClick: () -> Unit = {},
+  onCancelClick: () -> Unit = {}
+) {
+  Image(
+    imageVector = ImageVector.vectorResource(R.drawable.image_signal_backups_key),
+    contentDescription = null,
+    modifier = Modifier
+      .align(Alignment.CenterHorizontally)
+      .padding(top = 38.dp, bottom = 18.dp)
+      .size(80.dp)
+  )
+
+  Text(
+    text = stringResource(R.string.MessageBackupsKeyRecordScreen__create_a_new_backup_key),
+    style = MaterialTheme.typography.titleLarge,
+    textAlign = TextAlign.Center,
+    modifier = Modifier
+      .align(Alignment.CenterHorizontally)
+      .padding(bottom = 12.dp)
+      .horizontalGutters()
+  )
+
+  Text(
+    text = stringResource(R.string.MessageBackupsKeyRecordScreen__creating_a_new_key_is_only_necessary),
+    style = MaterialTheme.typography.bodyLarge,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    textAlign = TextAlign.Center,
+    modifier = Modifier
+      .padding(bottom = 91.dp, start = 36.dp, end = 36.dp)
+      .align(Alignment.CenterHorizontally)
+  )
+
+  Buttons.LargeTonal(
+    onClick = onContinueClick,
+    modifier = Modifier
+      .padding(bottom = 16.dp)
+      .fillMaxWidth()
+      .requiredWidthIn(min = Dp.Unspecified, max = 220.dp)
+      .align(Alignment.CenterHorizontally)
+  ) {
+    Text(text = stringResource(R.string.MessageBackupsKeyRecordScreen__continue))
+  }
+
+  TextButton(
+    onClick = onCancelClick,
+    modifier = Modifier
+      .padding(bottom = 48.dp)
+      .fillMaxWidth()
+      .requiredWidthIn(min = Dp.Unspecified, max = 220.dp)
+      .align(Alignment.CenterHorizontally)
+  ) {
+    Text(text = stringResource(android.R.string.cancel))
+  }
+}
+
+@Composable
+private fun ConfirmationFailureDialog(mode: MessageBackupsKeyRecordMode, onDismiss: () -> Unit) {
+  Dialogs.AdvancedAlertDialog(
+    title = stringResource(R.string.MessageBackupsKeyRecordScreen__recover_key_error),
+    body = stringResource(R.string.MessageBackupsKeyRecordScreen__recover_key_error_body),
+    positive = stringResource(R.string.MessageBackupsKeyRecordScreen__save_to_password_manager),
+    onPositive = {
+      (mode as? MessageBackupsKeyRecordMode.Passkey)?.onSaveToPasswordManager()
+      onDismiss()
+    },
+    neutral = stringResource(R.string.MessageBackupsKeyRecordScreen__save_key_manually),
+    onNeutral = {
+      (mode as? MessageBackupsKeyRecordMode.Passkey)?.onSaveManually()
+      onDismiss()
+    },
+    negative = stringResource(android.R.string.cancel),
+    onNegative = onDismiss
+  )
+}
+
+private suspend fun saveKeyToCredentialManager(
+  @UiContext activityContext: Context,
+  backupKey: String
+): CredentialManagerResult {
+  return SignalCredentialManager.saveCredential(
+    activityContext = activityContext,
+    username = credentialId(activityContext),
+    password = backupKey
+  )
+}
+
+private suspend fun getKeyFromCredentialManager(
+  @UiContext activityContext: Context
+): String? {
+  return SignalCredentialManager.getCredential(activityContext, credentialId(activityContext))?.password
+}
+
+/**
+ * Numberless accounts file their credential under the ACI, since that is the identifier they log in with.
+ * Everyone else uses a generic Signal-branded id.
+ */
+private fun credentialId(context: Context): String {
+  return if (SignalStore.account.isPhoneNumberless) {
+    SignalStore.account.requireAci().toString().uppercase()
+  } else {
+    context.getString(R.string.MessageBackupsKeyRecordScreen__backup_key_password_manager_id)
+  }
+}
+
+@DayNightPreviews
+@Composable
+private fun MessageBackupsKeyRecordScreenPreview() {
+  Previews.Preview {
+    MessageBackupsKeyRecordScreen(
+      backupKey = (0 until 63).map { (('A'..'Z') + ('0'..'9')).random() }.joinToString("") + "0",
+      keySaveState = null,
+      canOpenPasswordManagerSettings = true,
+      isGooglePasswordManagerDefault = false,
+      mode = MessageBackupsKeyRecordMode.CreateNewKey(
+        onCreateNewKeyClick = {},
+        onTurnOffAndDownloadClick = {},
+        isOptimizedStorageEnabled = true,
+        canRotateKey = true,
+        areBackupsEnabled = true
+      )
+    )
+  }
+}
+
+@DayNightPreviews
+@Composable
+private fun MessageBackupsKeyRecordScreenSameAsOnDeviceKeyPreview() {
+  Previews.Preview {
+    MessageBackupsKeyRecordScreen(
+      backupKey = (0 until 63).map { (('A'..'Z') + ('0'..'9')).random() }.joinToString("") + "0",
+      keySaveState = null,
+      canOpenPasswordManagerSettings = true,
+      isGooglePasswordManagerDefault = false,
+      mode = MessageBackupsKeyRecordMode.Next(onNextClick = {}),
+      notifyKeyIsSameAsOnDeviceBackupKey = true
+    )
+  }
+}
+
+@DayNightPreviews
+@Composable
+private fun MessageBackupsKeySaveScreenPreview() {
+  Previews.Preview {
+    MessageBackupsKeyRecordScreen(
+      backupKey = (0 until 63).map { (('A'..'Z') + ('0'..'9')).random() }.joinToString("") + "0",
+      keySaveState = null,
+      canOpenPasswordManagerSettings = true,
+      isGooglePasswordManagerDefault = false,
+      mode = MessageBackupsKeyRecordMode.Passkey(
+        onSaveToPasswordManager = {},
+        onSaveManually = {},
+        onSaveSuccessful = {}
+      )
+    )
+  }
+}
+
+@DayNightPreviews
+@Composable
+private fun SaveKeyConfirmationDialogPreview() {
+  Previews.Preview {
+    MessageBackupsKeyRecordScreen(
+      backupKey = (0 until 63).map { (('A'..'Z') + ('0'..'9')).random() }.joinToString("") + "0",
+      keySaveState = BackupKeySaveState.RequestingConfirmation,
+      canOpenPasswordManagerSettings = true,
+      isGooglePasswordManagerDefault = false,
+      mode = MessageBackupsKeyRecordMode.Next(onNextClick = {})
+    )
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@DayNightPreviews
+@Composable
+private fun CreateNewBackupKeySheetContentPreview() {
+  Previews.BottomSheetContentPreview {
+    Column {
+      CreateNewBackupKeySheetContent()
+    }
+  }
+}

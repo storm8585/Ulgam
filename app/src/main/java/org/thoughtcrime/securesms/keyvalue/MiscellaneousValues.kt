@@ -1,0 +1,461 @@
+package org.thoughtcrime.securesms.keyvalue
+
+import android.content.Context
+import org.signal.core.util.logging.Log
+import org.thoughtcrime.securesms.components.settings.app.usernamelinks.UsernameQrCodeColorScheme
+import org.thoughtcrime.securesms.database.model.databaseprotos.PendingChangeNumberMetadata
+import org.thoughtcrime.securesms.jobmanager.impl.ChangeNumberConstraintObserver
+import org.thoughtcrime.securesms.jobmanager.impl.SealedSenderConstraint
+import org.thoughtcrime.securesms.jobs.DeprecatedNotificationJob
+import org.thoughtcrime.securesms.keyvalue.protos.LeastActiveLinkedDevice
+
+class MiscellaneousValues internal constructor(store: KeyValueStore, context: Context) : SignalStoreValues(store) {
+  companion object {
+    private val TAG = Log.tag(MiscellaneousValues::class)
+
+    private const val LAST_PREKEY_REFRESH_TIME = "last_prekey_refresh_time"
+    private const val MESSAGE_REQUEST_ENABLE_TIME = "message_request_enable_time"
+    private const val LAST_PROFILE_REFRESH_TIME = "misc.last_profile_refresh_time"
+    private const val CLIENT_DEPRECATED = "misc.client_deprecated"
+    private const val OLD_DEVICE_TRANSFER_LOCKED = "misc.old_device.transfer.locked"
+    private const val HAS_EVER_HAD_AN_AVATAR = "misc.has.ever.had.an.avatar"
+    private const val CHANGE_NUMBER_LOCK = "misc.change_number.lock"
+    private const val PENDING_CHANGE_NUMBER_METADATA = "misc.pending_change_number.metadata"
+    private const val CENSORSHIP_LAST_CHECK_TIME = "misc.censorship.last_check_time"
+    private const val CENSORSHIP_SERVICE_REACHABLE = "misc.censorship.service_reachable"
+    private const val LAST_GV2_PROFILE_CHECK_TIME = "misc.last_gv2_profile_check_time"
+    private const val CDS_TOKEN = "misc.cds_token"
+    private const val CDS_BLOCKED_UNTIL = "misc.cds_blocked_until"
+    private const val LAST_FOREGROUND_TIME = "misc.last_foreground_time"
+    private const val PNI_INITIALIZED_DEVICES = "misc.pni_initialized_devices"
+    private const val LINKED_DEVICES_REMINDER = "misc.linked_devices_reminder"
+    private const val USERNAME_QR_CODE_COLOR = "mis.username_qr_color_scheme"
+    private const val KEYBOARD_LANDSCAPE_HEIGHT = "misc.keyboard.landscape_height"
+    private const val KEYBOARD_PORTRAIT_HEIGHT = "misc.keyboard.protrait_height"
+    private const val LAST_CONSISTENCY_CHECK_TIME = "misc.last_consistency_check_time"
+    private const val SERVER_TIME_OFFSET = "misc.server_time_offset"
+    private const val LAST_SERVER_TIME_OFFSET_UPDATE = "misc.last_server_time_offset_update"
+    private const val NEEDS_USERNAME_RESTORE = "misc.needs_username_restore"
+    private const val LAST_FORCED_PREKEY_REFRESH = "misc.last_forced_prekey_refresh"
+    private const val FORCE_PNI_SIGNED_PREKEY_ROTATION = "misc.force_pni_signed_prekey_rotation"
+    private const val LAST_CDS_FOREGROUND_SYNC = "misc.last_cds_foreground_sync"
+    private const val LINKED_DEVICE_LAST_ACTIVE_CHECK_TIME = "misc.linked_device.last_active_check_time"
+    private const val LAST_REFRESH_ATTRIBUTES_TIME = "misc.last_refresh_attributes_time"
+    private const val LEAST_ACTIVE_LINKED_DEVICE = "misc.linked_device.least_active"
+    private const val NEXT_DATABASE_ANALYSIS_TIME = "misc.next_database_analysis_time"
+    private const val LAST_NETWORK_RESET_TIME = "misc.last_network_reset_time"
+    private const val LAST_WEBSOCKET_CONNECT_TIME = "misc.last_websocket_connect_time"
+    private const val LAST_CONNECTIVITY_WARNING_TIME = "misc.last_connectivity_warning_time"
+    private const val NEW_LINKED_DEVICE_ID = "misc.new_linked_device_id"
+    private const val NEW_LINKED_DEVICE_CREATED_TIME = "misc.new_linked_device_created_time"
+    private const val STARTED_QUOTE_THUMBNAIL_MIGRATION = "misc.started_quote_thumbnail_migration"
+    private const val PREFERRED_MAIN_ACTIVITY_ANCHOR_INDEX = "misc.preferred_main_activity_anchor_index"
+    private const val LAST_KEY_TRANSPARENCY_TIME = "misc.last_key_transparency_time"
+    private const val NEXT_KEY_TRANSPARENCY_TIME = "misc.next_key_transparency_time"
+    private const val HAS_KEY_TRANSPARENCY_FAILURE = "misc.has_key_transparency_failure"
+    private const val HAS_SEEN_KEY_TRANSPARENCY_FAILURE = "misc.has_seen_key_transparency_failure"
+    private const val CAMERA_FACING_FRONT = "misc.camera_facing_front"
+    private const val COMPLETED_COLLAPSED_EVENTS_MIGRATION = "misc.completed_collapsed_events_migration"
+    private const val CAPTCHA_LAST_VIEWED_AT = "misc.captcha_last_viewed_at"
+    private const val CALLING_ASSETS_VERSION = "misc.calling_assets_version"
+    private const val LAST_SYNC_MESSAGE_SEEN_TIME_MS = "misc.last_sync_message_seen_time"
+    private const val LAST_APPLIED_PNI_CHANGE_SERVER_TIMESTAMP = "misc.last_applied_pni_change_server_timestamp"
+    private const val LAST_MISSING_PLAY_SERVICES_FCM_VERIFICATION_TIME = "misc.last_missing_play_services_fcm_verification_time"
+    private const val LAST_PROCESSED_SHARE_DATA_TIMESTAMP = "misc.last_processed_share_data_timestamp"
+    private const val DIRECTORY_REFRESH_TIME = "misc.directory_refresh_time"
+    private const val HAS_SUCCESSFULLY_RETRIEVED_DIRECTORY = "misc.has_successfully_retrieved_directory"
+    private const val LAST_FULL_CONTACT_SYNC_TIME = "misc.last_full_contact_sync_time"
+    private const val NEEDS_FULL_CONTACT_SYNC = "misc.needs_full_contact_sync"
+    private const val SERVICE_OUTAGE = "misc.service_outage"
+    private const val LAST_OUTAGE_CHECK_TIME = "misc.last_outage_check_time"
+    private const val SIGNED_PREKEY_ROTATION_TIME = "misc.signed_prekey_rotation_time"
+    private const val JOB_MANAGER_VERSION = "misc.job_manager_version"
+    private const val FIRST_INSTALL_VERSION = "misc.first_install_version"
+    private const val NOTIFICATION_CHANNEL_VERSION = "misc.notification_channel_version"
+    private const val NOTIFICATION_MESSAGES_CHANNEL_VERSION = "misc.notification_messages_channel_version"
+    private const val RATING_ENABLED = "misc.rating_enabled"
+    private const val RATING_LATER_TIMESTAMP = "misc.rating_later_timestamp"
+  }
+
+  init {
+    if (!store.containsKey(FIRST_INSTALL_VERSION)) {
+      migrateFromSharedPrefsV1(context)
+    }
+  }
+
+  /** Do not alter. If you need to migrate more stuff, create a new method. */
+  private fun migrateFromSharedPrefsV1(context: Context) {
+    Log.i(TAG, "[V1] Migrating misc values from shared prefs.")
+
+    store.beginWrite()
+      .putLong(DIRECTORY_REFRESH_TIME, LegacySharedPrefs.getLong(context, "pref_directory_refresh_time", 0))
+      .putBoolean(HAS_SUCCESSFULLY_RETRIEVED_DIRECTORY, LegacySharedPrefs.getBoolean(context, "pref_successful_directory", false))
+      .putLong(LAST_FULL_CONTACT_SYNC_TIME, LegacySharedPrefs.getLong(context, "pref_last_full_contact_sync_time", 0))
+      .putBoolean(NEEDS_FULL_CONTACT_SYNC, LegacySharedPrefs.getBoolean(context, "pref_needs_full_contact_sync", false))
+      .putBoolean(SERVICE_OUTAGE, LegacySharedPrefs.getBoolean(context, "pref_service_outage", false))
+      .putLong(LAST_OUTAGE_CHECK_TIME, LegacySharedPrefs.getLong(context, "pref_last_outage_check_time", 0))
+      .putLong(SIGNED_PREKEY_ROTATION_TIME, LegacySharedPrefs.getLong(context, "pref_signed_pre_key_rotation_time", 0))
+      .putInteger(JOB_MANAGER_VERSION, LegacySharedPrefs.getInteger(context, "pref_job_manager_version", 1))
+      .putInteger(NOTIFICATION_CHANNEL_VERSION, LegacySharedPrefs.getInteger(context, "pref_notification_channel_version", 1))
+      .putInteger(NOTIFICATION_MESSAGES_CHANNEL_VERSION, LegacySharedPrefs.getInteger(context, "pref_notification_messages_channel_version", 1))
+      .putBoolean(RATING_ENABLED, LegacySharedPrefs.getBoolean(context, "pref_rating_enabled", true))
+      .putLong(RATING_LATER_TIMESTAMP, LegacySharedPrefs.getLong(context, "pref_rating_later", -1))
+      // Written last so that it acts as the marker for this migration having run.
+      .putInteger(FIRST_INSTALL_VERSION, LegacySharedPrefs.getInteger(context, "pref_first_install_version", -1))
+      .commit()
+  }
+
+  /** When the next contact directory refresh is scheduled. */
+  var directoryRefreshTime: Long by longValue(DIRECTORY_REFRESH_TIME, 0)
+
+  /** Whether we've ever managed to pull down the contact directory. */
+  var hasSuccessfullyRetrievedDirectory: Boolean by booleanValue(HAS_SUCCESSFULLY_RETRIEVED_DIRECTORY, false)
+
+  var lastFullContactSyncTime: Long by longValue(LAST_FULL_CONTACT_SYNC_TIME, 0)
+
+  var needsFullContactSync: Boolean by booleanValue(NEEDS_FULL_CONTACT_SYNC, false)
+
+  /** Whether the service is currently reporting an outage. */
+  var serviceOutage: Boolean by booleanValue(SERVICE_OUTAGE, false)
+
+  var lastOutageCheckTime: Long by longValue(LAST_OUTAGE_CHECK_TIME, 0)
+
+  var signedPreKeyRotationTime: Long by longValue(SIGNED_PREKEY_ROTATION_TIME, 0)
+
+  /** The [org.thoughtcrime.securesms.jobmanager.JobManager] version the job database was last migrated to. */
+  var jobManagerVersion: Int by integerValue(JOB_MANAGER_VERSION, 1)
+
+  /** The canonical version code the app was first installed at, or -1 if we don't know. */
+  var firstInstallVersion: Int by integerValue(FIRST_INSTALL_VERSION, -1)
+
+  var notificationChannelVersion: Int by integerValue(NOTIFICATION_CHANNEL_VERSION, 1)
+
+  var notificationMessagesChannelVersion: Int by integerValue(NOTIFICATION_MESSAGES_CHANNEL_VERSION, 1)
+
+  /** Whether we're still allowed to ask the user to rate the app. */
+  var ratingEnabled: Boolean by booleanValue(RATING_ENABLED, true)
+
+  /** The earliest time we're allowed to ask the user to rate the app again. */
+  var ratingLaterTimestamp: Long by longValue(RATING_LATER_TIMESTAMP, -1)
+
+  public override fun onFirstEverAppLaunch() {
+    putLong(MESSAGE_REQUEST_ENABLE_TIME, 0)
+    putBoolean(NEEDS_USERNAME_RESTORE, true)
+    putBoolean(STARTED_QUOTE_THUMBNAIL_MIGRATION, true)
+  }
+
+  public override fun getKeysToIncludeInBackup(): List<String> {
+    return listOf(STARTED_QUOTE_THUMBNAIL_MIGRATION)
+  }
+
+  /**
+   * Represents the last time a _full_ prekey refreshed finished. That means signed+one-time prekeys for both ACI and PNI.
+   */
+  var lastFullPrekeyRefreshTime by longValue(LAST_PREKEY_REFRESH_TIME, 0)
+
+  val messageRequestEnableTime by longValue(MESSAGE_REQUEST_ENABLE_TIME, 0)
+
+  /**
+   * Get the last time we successfully completed a forced prekey refresh.
+   */
+  var lastForcedPreKeyRefresh by longValue(LAST_FORCED_PREKEY_REFRESH, 0)
+
+  /**
+   * Bypasses the timeout in [org.thoughtcrime.securesms.jobs.PreKeysSyncJob] since otherwise we can hit a race.
+   */
+  var forcePniSignedPreKeyRotation by booleanValue(FORCE_PNI_SIGNED_PREKEY_ROTATION, false)
+
+  /**
+   * Envelope serverTimestamp of the most recently applied PniChangeNumber sync. Used to reject
+   * stale replays — a sync with serverTimestamp <= this value is treated as a replay and ignored.
+   */
+  var lastAppliedPniChangeServerTimestamp by longValue(LAST_APPLIED_PNI_CHANGE_SERVER_TIMESTAMP, 0L)
+
+  /**
+   * The last time we completed a routine profile refresh.
+   */
+  var lastProfileRefreshTime by longValue(LAST_PROFILE_REFRESH_TIME, 0)
+
+  /**
+   * Whether or not the client is currently in a 'deprecated' state, disallowing network access. Send a notification if the client changes from not deprecated to deprecated state.
+   */
+  var isClientDeprecated: Boolean
+    get() = getBoolean(CLIENT_DEPRECATED, false)
+    set(isDeprecated) {
+      if (isDeprecated && !isClientDeprecated) {
+        DeprecatedNotificationJob.enqueue()
+      }
+      putBoolean(CLIENT_DEPRECATED, isDeprecated)
+    }
+
+  /**
+   * Whether or not we've locked the device after they've transferred to a new one.
+   */
+  var isOldDeviceTransferLocked by booleanValue(OLD_DEVICE_TRANSFER_LOCKED, false)
+
+  /**
+   * Whether or not the user has ever had an avatar.
+   */
+  var hasEverHadAnAvatar by booleanValue(HAS_EVER_HAD_AN_AVATAR, false)
+
+  val isChangeNumberLocked: Boolean by booleanValue(CHANGE_NUMBER_LOCK, false)
+
+  var preferredMainActivityAnchorIndex: Int by integerValue(PREFERRED_MAIN_ACTIVITY_ANCHOR_INDEX, -1)
+
+  var lastSyncMessageSeenTimeMs: Long by longValue(LAST_SYNC_MESSAGE_SEEN_TIME_MS, 0L)
+
+  fun lockChangeNumber() {
+    putBoolean(CHANGE_NUMBER_LOCK, true)
+    ChangeNumberConstraintObserver.onChange()
+  }
+
+  fun unlockChangeNumber() {
+    putBoolean(CHANGE_NUMBER_LOCK, false)
+    ChangeNumberConstraintObserver.onChange()
+  }
+
+  val pendingChangeNumberMetadata: PendingChangeNumberMetadata?
+    get() = getObject(PENDING_CHANGE_NUMBER_METADATA, null, PendingChangeNumberMetadataSerializer)
+
+  /** Store pending new PNI data to be applied after successful change number  */
+  fun setPendingChangeNumberMetadata(metadata: PendingChangeNumberMetadata) {
+    putObject(PENDING_CHANGE_NUMBER_METADATA, metadata, PendingChangeNumberMetadataSerializer)
+  }
+
+  /** Clear pending new PNI data after confirmed successful or failed change number  */
+  fun clearPendingChangeNumberMetadata() {
+    remove(PENDING_CHANGE_NUMBER_METADATA)
+  }
+
+  /**
+   * The last time we checked if the service was reachable without censorship circumvention.
+   */
+  var lastCensorshipServiceReachabilityCheckTime by longValue(CENSORSHIP_LAST_CHECK_TIME, 0)
+
+  /**
+   * Whether or not the service is reachable without censorship circumvention.
+   */
+  var isServiceReachableWithoutCircumvention by booleanValue(CENSORSHIP_SERVICE_REACHABLE, false)
+
+  /**
+   * The last time we did a routing check to see if our GV2 groups have the latest version of our profile key.
+   */
+  var lastGv2ProfileCheckTime by longValue(LAST_GV2_PROFILE_CHECK_TIME, 0)
+
+  /**
+   * The CDS token that is used for rate-limiting.
+   */
+  var cdsToken by nullableBlobValue(CDS_TOKEN, null)
+
+  /**
+   * Indicates that a CDS request will never succeed at the current contact count.
+   */
+  fun markCdsPermanentlyBlocked() {
+    putLong(CDS_BLOCKED_UNTIL, Long.MAX_VALUE)
+  }
+
+  /**
+   * Clears any rate limiting state related to CDS.
+   */
+  fun clearCdsBlocked() {
+    cdsBlockedUtil = 0
+  }
+
+  /** Whether or not we expect the next CDS request to succeed.*/
+  val isCdsBlocked: Boolean
+    get() = cdsBlockedUtil > 0
+
+  /**
+   * This represents the next time we think we'll be able to make a successful CDS request. If it is before this time, we expect the request will fail
+   * (assuming the user still has the same number of new E164s).
+   */
+  var cdsBlockedUtil by longValue(CDS_BLOCKED_UNTIL, 0)
+
+  /**
+   * The last time the user foregrounded the app.
+   */
+  var lastForegroundTime by longValue(LAST_FOREGROUND_TIME, 0)
+
+  /**
+   * Whether or not we've done the initial "PNP Hello World" dance.
+   */
+  var hasPniInitializedDevices by booleanValue(PNI_INITIALIZED_DEVICES, true)
+
+  /**
+   * Whether or not we should show a reminder for the user to relink their devices after re-registering.
+   */
+  var shouldShowLinkedDevicesReminder by booleanValue(LINKED_DEVICES_REMINDER, false)
+
+  /**
+   * The color the user saved for rendering their shareable username QR code.
+   */
+  var usernameQrCodeColorScheme: UsernameQrCodeColorScheme
+    get() {
+      val serialized = getString(USERNAME_QR_CODE_COLOR, null)
+      return UsernameQrCodeColorScheme.deserialize(serialized)
+    }
+    set(color) {
+      putString(USERNAME_QR_CODE_COLOR, color.serialize())
+    }
+
+  /**
+   * Cached landscape keyboard height.
+   */
+  var keyboardLandscapeHeight by integerValue(KEYBOARD_LANDSCAPE_HEIGHT, 0)
+
+  /**
+   * Cached portrait keyboard height.
+   */
+  var keyboardPortraitHeight by integerValue(KEYBOARD_PORTRAIT_HEIGHT, 0)
+
+  /**
+   * The last time we ran an account consistency check via [org.thoughtcrime.securesms.jobs.AccountConsistencyWorkerJob]
+   */
+  var lastConsistencyCheckTime by longValue(LAST_CONSISTENCY_CHECK_TIME, 0)
+
+  /**
+   * The last-known offset between our local clock and the server. To get an estimate of the server time, take your current time and subtract this offset. e.g.
+   *
+   * estimatedServerTime = System.currentTimeMillis() - SignalStore.misc.getLastKnownServerTimeOffset()
+   */
+  val lastKnownServerTimeOffset by longValue(SERVER_TIME_OFFSET, 0)
+
+  /**
+   * An estimate of the server time, based on the last-known server time offset.
+   */
+  val estimatedServerTime: Long
+    get() = System.currentTimeMillis() - lastKnownServerTimeOffset
+
+  /**
+   * The last time (using our local clock) we updated the server time offset returned by [.getLastKnownServerTimeOffset]}.
+   */
+  val lastKnownServerTimeOffsetUpdateTime by longValue(LAST_SERVER_TIME_OFFSET_UPDATE, 0)
+
+  /**
+   * Sets the last-known server time.
+   */
+  fun setLastKnownServerTime(serverTime: Long, currentTime: Long) {
+    store
+      .beginWrite()
+      .putLong(SERVER_TIME_OFFSET, currentTime - serverTime)
+      .putLong(LAST_SERVER_TIME_OFFSET_UPDATE, System.currentTimeMillis())
+      .apply()
+
+    SealedSenderConstraint.refresh()
+  }
+
+  /**
+   * Whether or not we should attempt to restore the user's username and link.
+   */
+  var needsUsernameRestore by booleanValue(NEEDS_USERNAME_RESTORE, false)
+
+  /**
+   * How long it's been since the last foreground CDS sync, which we do in response to new threads being created.
+   */
+  var lastCdsForegroundSyncTime by longValue(LAST_CDS_FOREGROUND_SYNC, 0)
+
+  /**
+   * The last time we checked for linked device activity.
+   */
+  var linkedDeviceLastActiveCheckTime by longValue(LINKED_DEVICE_LAST_ACTIVE_CHECK_TIME, 0)
+
+  /**
+   * The last time we successfully refreshed our account attributes with the service.
+   */
+  var lastRefreshAttributesTime: Long by longValue(LAST_REFRESH_ATTRIBUTES_TIME, 0)
+
+  /**
+   * Details about the least-active linked device.
+   */
+  var leastActiveLinkedDevice: LeastActiveLinkedDevice? by protoValue(LEAST_ACTIVE_LINKED_DEVICE, LeastActiveLinkedDevice.ADAPTER)
+
+  /**
+   * When the next scheduled database analysis is.
+   */
+  var nextDatabaseAnalysisTime: Long by longValue(NEXT_DATABASE_ANALYSIS_TIME, 0)
+
+  var lastNetworkResetDueToStreamResets: Long by longValue(LAST_NETWORK_RESET_TIME, 0L)
+
+  /**
+   * The last time you successfully connected to the websocket.
+   */
+  var lastWebSocketConnectTime: Long by longValue(LAST_WEBSOCKET_CONNECT_TIME, System.currentTimeMillis())
+
+  /**
+   * The last time we prompted the user regarding a [org.thoughtcrime.securesms.util.ConnectivityWarning].
+   */
+  var lastConnectivityWarningTime: Long by longValue(LAST_CONNECTIVITY_WARNING_TIME, 0)
+
+  /**
+   * The device id of the device that was recently linked
+   */
+  var newLinkedDeviceId: Int by integerValue(NEW_LINKED_DEVICE_ID, 0)
+
+  /**
+   * The time, in milliseconds, that the device was created at
+   */
+  var newLinkedDeviceCreatedTime: Long by longValue(NEW_LINKED_DEVICE_CREATED_TIME, 0)
+
+  /**
+   * Whether or not we have started the quote thumbnail migration. We store this so that upon restoring from
+   * a local backup, we can know whether or not the user marked all of the quotes that need conversion in
+   * the database. If so, we can enqueue a job to continue any pending conversions, and if not we can start
+   * the conversion process from scratch.
+   */
+  @get:JvmName("startedQuoteThumbnailMigration")
+  var startedQuoteThumbnailMigration: Boolean by booleanValue(STARTED_QUOTE_THUMBNAIL_MIGRATION, false)
+
+  /**
+   * The last time we ran key transparency against ourself
+   */
+  var lastKeyTransparencyTime: Long by longValue(LAST_KEY_TRANSPARENCY_TIME, 0)
+
+  /**
+   * The next time we should run key transparency self check
+   */
+  var nextKeyTransparencyTime: Long by longValue(NEXT_KEY_TRANSPARENCY_TIME, 0)
+
+  /**
+   * Whether you are unable to run key transparency on yourself
+   */
+  var hasKeyTransparencyFailure: Boolean by booleanValue(HAS_KEY_TRANSPARENCY_FAILURE, false)
+
+  /**
+   * Whether you have seen the dialog on key transparency failure
+   */
+  var hasSeenKeyTransparencyFailure: Boolean by booleanValue(HAS_SEEN_KEY_TRANSPARENCY_FAILURE, false)
+
+  /**
+   * Whether or not the preferred camera direction is front-facing.
+   */
+  var isCameraFacingFront: Boolean by booleanValue(CAMERA_FACING_FRONT, true)
+
+  var completedCollapsedEventsMigration: Boolean by booleanValue(COMPLETED_COLLAPSED_EVENTS_MIGRATION, false)
+
+  /**
+   * The last time the user viewed the captcha/recaptcha proof activity.
+   */
+  var captchaLastViewedAt: Long by longValue(CAPTCHA_LAST_VIEWED_AT, 0)
+
+  /**
+   * The last successfully-downloaded calling assets version. Compared against
+   * [org.thoughtcrime.securesms.service.webrtc.CallingAssets.CURRENT_VERSION] to determine
+   * if new assets need to be fetched.
+   */
+  var callingAssetsVersion: Int by integerValue(CALLING_ASSETS_VERSION, 0)
+
+  /**
+   * The last time we tried to get an FCM token for a user reporting missing Play Services.
+   */
+  var lastMissingPlayServicesFcmVerificationTime: Long by longValue(LAST_MISSING_PLAY_SERVICES_FCM_VERIFICATION_TIME, 0)
+
+  /**
+   * High-water mark of the most recently consumed share payload, as set by
+   * [org.thoughtcrime.securesms.conversation.ConversationArgs.shareDataTimestamp]. Any share whose timestamp is at or
+   * below this has already been handed off to the conversation and must never be replayed.
+   *
+   * This has to outlive the navigation entry carrying the payload, which is persisted and can be restored long after
+   * the activity that consumed it is gone.
+   */
+  var lastProcessedShareDataTimestamp: Long by longValue(LAST_PROCESSED_SHARE_DATA_TIMESTAMP, -1)
+}

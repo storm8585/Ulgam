@@ -1,0 +1,3 @@
+-dontwarn retrofit.**
+-keepattributes Signature
+-keepattributes Exceptions

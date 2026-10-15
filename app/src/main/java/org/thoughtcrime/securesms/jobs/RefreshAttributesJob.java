@@ -1,0 +1,196 @@
+package org.thoughtcrime.securesms.jobs;
+
+import android.text.TextUtils;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import org.signal.core.util.Base64;
+import org.signal.core.util.crypto.DeviceNameCipher;
+import org.signal.core.util.logging.Log;
+import org.signal.network.exceptions.NonSuccessfulResponseCodeException;
+import org.thoughtcrime.securesms.AppCapabilities;
+import org.thoughtcrime.securesms.crypto.ProfileKeyUtil;
+import org.thoughtcrime.securesms.dependencies.AppDependencies;
+import org.thoughtcrime.securesms.jobmanager.Job;
+import org.thoughtcrime.securesms.jobmanager.JsonJobData;
+import org.thoughtcrime.securesms.jobmanager.impl.NetworkConstraint;
+import org.thoughtcrime.securesms.keyvalue.PhoneNumberPrivacyValues.PhoneNumberDiscoverabilityMode;
+import org.thoughtcrime.securesms.keyvalue.SignalStore;
+import org.thoughtcrime.securesms.keyvalue.SvrValues;
+import org.thoughtcrime.securesms.net.SignalNetwork;
+import org.thoughtcrime.securesms.registration.data.RegistrationRepository;
+import org.whispersystems.signalservice.api.NetworkResultUtil;
+import org.whispersystems.signalservice.api.RequestResultUtil;
+import org.whispersystems.signalservice.api.account.AccountAttributes;
+import org.whispersystems.signalservice.api.crypto.UnidentifiedAccess;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
+
+public class RefreshAttributesJob extends BaseJob {
+
+  public static final String KEY = "RefreshAttributesJob";
+
+  private static final String TAG = Log.tag(RefreshAttributesJob.class);
+
+  private static final String KEY_FORCED = "forced";
+
+  private static final long REFRESH_INTERVAL = TimeUnit.DAYS.toMillis(7);
+
+  private static volatile boolean hasRefreshedThisAppCycle;
+
+  private final boolean forced;
+
+  /**
+   * Enqueues a routine refresh if it's been long enough since our last successful one.
+   */
+  public static void enqueueIfNecessary() {
+    if (!SignalStore.account().isRegistered()) {
+      return;
+    }
+
+    long timeSinceLastRefresh = System.currentTimeMillis() - SignalStore.misc().getLastRefreshAttributesTime();
+
+    if (timeSinceLastRefresh > REFRESH_INTERVAL || timeSinceLastRefresh < 0) {
+      AppDependencies.getJobManager().add(new RefreshAttributesJob(false));
+    }
+  }
+
+  public static RefreshAttributesJob forAccountRestore() {
+    return new RefreshAttributesJob(true, Parameters.PRIORITY_HIGH);
+  }
+
+  public RefreshAttributesJob() {
+    this(true);
+  }
+
+  /**
+   * @param forced True if you want this job to run no matter what. False if you only want this job
+   *               to run if it hasn't run yet this app cycle.
+   */
+  public RefreshAttributesJob(boolean forced) {
+    this(forced, Parameters.PRIORITY_DEFAULT);
+  }
+
+  private RefreshAttributesJob(boolean forced, @Parameters.Priority int priority) {
+    this(new Job.Parameters.Builder()
+                           .setGlobalPriority(priority)
+                           .addConstraint(NetworkConstraint.KEY)
+                           .setQueue("RefreshAttributesJob")
+                           .setMaxInstancesForFactory(2)
+                           .setLifespan(TimeUnit.DAYS.toMillis(30))
+                           .setMaxAttempts(Parameters.UNLIMITED)
+                           .build(),
+         forced);
+  }
+
+  private RefreshAttributesJob(@NonNull Job.Parameters parameters, boolean forced) {
+    super(parameters);
+    this.forced = forced;
+  }
+
+  @Override
+  public @Nullable byte[] serialize() {
+    return new JsonJobData.Builder().putBoolean(KEY_FORCED, forced).serialize();
+  }
+
+  @Override
+  public @NonNull String getFactoryKey() {
+    return KEY;
+  }
+
+  @Override
+  public void onRun() throws IOException {
+    if (!SignalStore.account().isRegistered() || SignalStore.account().getAci() == null) {
+      Log.w(TAG, "Not yet registered. Skipping.");
+      return;
+    }
+
+    if (SignalStore.account().isUnauthorizedReceived()) {
+      Log.i(TAG, "No longer authorized. Ignoring.");
+      return;
+    }
+
+    if (!forced && hasRefreshedThisAppCycle) {
+      Log.d(TAG, "Already refreshed this app cycle. Skipping.");
+      return;
+    }
+
+    SvrValues svrValues = SignalStore.svr();
+
+    AccountAttributes.Capabilities capabilities = AppCapabilities.getCapabilities(svrValues.hasPin() && !svrValues.hasOptedOut());
+
+    if (SignalStore.account().isPrimaryDevice()) {
+      setPrimaryDeviceAttributes(svrValues, capabilities);
+    } else {
+      boolean phoneNumberDiscoverable = !SignalStore.account().isPhoneNumberless() && SignalStore.phoneNumberPrivacy().getPhoneNumberDiscoverabilityMode() == PhoneNumberDiscoverabilityMode.DISCOVERABLE;
+      Log.i(TAG, "Linked device, refreshing device capabilities and phone number discoverability. Capabilities: " + capabilities + ", discoverable: " + phoneNumberDiscoverable);
+      RequestResultUtil.successOrThrow(SignalNetwork.accountApi().setCapabilities(capabilities));
+      RequestResultUtil.successOrThrowNoError(SignalNetwork.accountApi().setPhoneNumberDiscoverability(phoneNumberDiscoverable));
+    }
+
+    hasRefreshedThisAppCycle = true;
+    SignalStore.misc().setLastRefreshAttributesTime(System.currentTimeMillis());
+  }
+
+  private void setPrimaryDeviceAttributes(@NonNull SvrValues svrValues, @NonNull AccountAttributes.Capabilities capabilities) throws IOException {
+    int       registrationId              = SignalStore.account().getRegistrationId();
+    boolean   fetchesMessages             = !SignalStore.account().isFcmEnabled() || SignalStore.settings().getForceWebsocketMode().isEnabled();
+    byte[]    unidentifiedAccessKey       = UnidentifiedAccess.deriveAccessKeyFrom(ProfileKeyUtil.getSelfProfileKey());
+    boolean   universalUnidentifiedAccess = SignalStore.settings().isUniversalUnidentifiedAccess();
+    String    registrationLockV2          = null;
+    int       pniRegistrationId           = RegistrationRepository.getPniRegistrationId();
+    String    recoveryPassword            = svrValues.getMasterKey().deriveRegistrationRecoveryPassword();
+
+    if (svrValues.isRegistrationLockEnabled()) {
+      registrationLockV2 = svrValues.getRegistrationLockToken();
+    }
+
+    boolean phoneNumberDiscoverable = !SignalStore.account().isPhoneNumberless() && SignalStore.phoneNumberPrivacy().getPhoneNumberDiscoverabilityMode() == PhoneNumberDiscoverabilityMode.DISCOVERABLE;
+
+    String deviceName = SignalStore.account().getDeviceName();
+    byte[] encryptedDeviceName = (deviceName == null) ? null : DeviceNameCipher.encryptDeviceName(deviceName.getBytes(StandardCharsets.UTF_8), SignalStore.account().getAciIdentityKey());
+
+    Log.i(TAG, "Calling setAccountAttributes() reglockV2? " + !TextUtils.isEmpty(registrationLockV2) + ", pin? " + svrValues.hasPin() + ", restoredAEP? " + SignalStore.account().restoredAccountEntropyPool() +
+               "\n    Recovery password? " + !TextUtils.isEmpty(recoveryPassword) +
+               "\n    Phone number discoverable : " + phoneNumberDiscoverable +
+               "\n    Device Name : " + (encryptedDeviceName != null) +
+               "\n  Capabilities: " + capabilities);
+
+    AccountAttributes accountAttributes = new AccountAttributes(
+        null,
+        registrationId,
+        fetchesMessages,
+        registrationLockV2,
+        unidentifiedAccessKey,
+        universalUnidentifiedAccess,
+        capabilities,
+        phoneNumberDiscoverable,
+        (encryptedDeviceName == null) ? null : Base64.encodeWithPadding(encryptedDeviceName),
+        pniRegistrationId,
+        recoveryPassword
+    );
+
+    NetworkResultUtil.toBasicLegacy(SignalNetwork.accountApi().setAccountAttributes(accountAttributes));
+  }
+
+  @Override
+  public boolean onShouldRetry(@NonNull Exception e) {
+    return e instanceof IOException && !(e instanceof NonSuccessfulResponseCodeException);
+  }
+
+  @Override
+  public void onFailure() {
+    Log.w(TAG, "Failed to update account attributes!");
+  }
+
+  public static class Factory implements Job.Factory<RefreshAttributesJob> {
+    @Override
+    public @NonNull RefreshAttributesJob create(@NonNull Parameters parameters, @Nullable byte[] serializedData) {
+      JsonJobData data = JsonJobData.deserialize(serializedData);
+      return new RefreshAttributesJob(parameters, data.getBooleanOrDefault(KEY_FORCED, true));
+    }
+  }
+}

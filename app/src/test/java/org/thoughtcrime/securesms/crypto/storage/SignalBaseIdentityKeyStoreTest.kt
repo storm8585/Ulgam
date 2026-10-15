@@ -1,0 +1,106 @@
+package org.thoughtcrime.securesms.crypto.storage
+
+import android.content.Context
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.mockkObject
+import io.mockk.unmockkObject
+import io.mockk.verify
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.signal.core.models.ServiceId
+import org.signal.libsignal.protocol.IdentityKey
+import org.signal.libsignal.protocol.IdentityKeyPair
+import org.signal.libsignal.protocol.SignalProtocolAddress
+import org.signal.libsignal.protocol.ecc.ECKeyPair
+import org.signal.libsignal.protocol.ecc.ECPublicKey
+import org.signal.libsignal.protocol.state.IdentityKeyStore
+import org.thoughtcrime.securesms.database.IdentityTable
+import org.thoughtcrime.securesms.database.model.IdentityStoreRecord
+import org.thoughtcrime.securesms.keyvalue.AccountValues
+import org.thoughtcrime.securesms.keyvalue.SignalStore
+import org.whispersystems.signalservice.test.LibSignalLibraryUtil.assumeLibSignalSupportedOnOS
+import java.util.UUID
+
+class SignalBaseIdentityKeyStoreTest {
+  companion object {
+    private val ADDRESS = ServiceId.parseOrThrow(UUID.randomUUID().toString()).toString()
+  }
+
+  @Before
+  fun ensureNativeSupported() {
+    assumeLibSignalSupportedOnOS()
+  }
+
+  @Test
+  fun `getIdentity() hits disk on first retrieve but not the second`() {
+    val mockDb = mockk<IdentityTable>()
+    val subject = SignalBaseIdentityKeyStore(mockk<Context>(), mockDb)
+    val identityKey = IdentityKey(ECPublicKey.fromPublicKeyBytes(ByteArray(32)))
+    val record = mockRecord(ADDRESS, identityKey)
+
+    every { mockDb.getIdentityStoreRecord(ADDRESS) } returns record
+
+    assertEquals(identityKey, subject.getIdentity(SignalProtocolAddress(ADDRESS, 1)))
+    verify(exactly = 1) { mockDb.getIdentityStoreRecord(ADDRESS) }
+
+    assertEquals(identityKey, subject.getIdentity(SignalProtocolAddress(ADDRESS, 1)))
+    verify(exactly = 1) { mockDb.getIdentityStoreRecord(ADDRESS) }
+  }
+
+  @Test
+  fun `invalidate() evicts cache entry`() {
+    val mockDb = mockk<IdentityTable>()
+    val subject = SignalBaseIdentityKeyStore(mockk<Context>(), mockDb)
+    val identityKey = IdentityKey(ECPublicKey.fromPublicKeyBytes(ByteArray(32)))
+    val record = mockRecord(ADDRESS, identityKey)
+
+    every { mockDb.getIdentityStoreRecord(ADDRESS) } returns record
+
+    assertEquals(identityKey, subject.getIdentity(SignalProtocolAddress(ADDRESS, 1)))
+    verify(exactly = 1) { mockDb.getIdentityStoreRecord(ADDRESS) }
+
+    subject.invalidate(ADDRESS)
+
+    assertEquals(identityKey, subject.getIdentity(SignalProtocolAddress(ADDRESS, 1)))
+    verify(exactly = 2) { mockDb.getIdentityStoreRecord(ADDRESS) }
+  }
+
+  @Test
+  fun `isTrustedIdentity() treats any casing of the self aci as self`() {
+    val selfAci = ServiceId.ACI.from(UUID.randomUUID())
+    val selfIdentityKey = IdentityKeyPair.generate()
+    val account = mockk<AccountValues> {
+      every { requireAci() } returns selfAci
+      every { pni } returns null
+      every { e164 } returns null
+      every { aciIdentityKey } returns selfIdentityKey
+    }
+    mockkObject(SignalStore)
+    every { SignalStore.account } returns account
+
+    try {
+      val subject = SignalBaseIdentityKeyStore(mockk<Context>(), mockk<IdentityTable>())
+      val address = SignalProtocolAddress(selfAci.toString().uppercase(), 2)
+
+      assertFalse(subject.isTrustedIdentity(address, IdentityKey(ECKeyPair.generate().publicKey), IdentityKeyStore.Direction.RECEIVING))
+      assertTrue(subject.isTrustedIdentity(address, selfIdentityKey.publicKey, IdentityKeyStore.Direction.RECEIVING))
+    } finally {
+      unmockkObject(SignalStore)
+    }
+  }
+
+  private fun mockRecord(addressName: String, identityKey: IdentityKey): IdentityStoreRecord {
+    return IdentityStoreRecord(
+      addressName = addressName,
+      identityKey = identityKey,
+      verifiedStatus = IdentityTable.VerifiedStatus.DEFAULT,
+      firstUse = false,
+      timestamp = 1,
+      nonblockingApproval = true
+    )
+  }
+}

@@ -1,0 +1,86 @@
+name: Build Signal APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_abi:
+        description: 'Target ABI to compile'
+        required: true
+        default: 'armeabi-v7a'
+        type: choice
+        options:
+          - 'armeabi-v7a'
+          - 'arm64-v8a'
+          - 'all'
+  push:
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Staging Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/ndk/*
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Configure Swap Space (4GB)
+        run: |
+          sudo fallocate -l 4G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Gradle & Cache
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-disabled: false
+          cache-read-only: false
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Staging Debug APK
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx6g -XX:MaxMetaspaceSize=1g -XX:+UseG1GC' -Dkotlin.daemon.jvmargs='-Xmx2g'"
+          TARGET_ABI: ${{ inputs.target_abi || 'armeabi-v7a' }}
+        run: |
+          if [ "$TARGET_ABI" = "all" ]; then
+            ./gradlew assemblePlayStagingDebug --stacktrace --no-daemon
+          else
+            ./gradlew assemblePlayStagingDebug -PtargetAbi=$TARGET_ABI --stacktrace --no-daemon
+          fi
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Signal-Staging-Debug-APK
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14

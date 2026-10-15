@@ -1,0 +1,285 @@
+/*
+ * Copyright 2023 Signal Messenger, LLC
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+package org.thoughtcrime.securesms.conversation.v2
+
+import android.Manifest
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.ContactsContract
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContract
+import androidx.core.content.IntentCompat
+import androidx.fragment.app.Fragment
+import org.signal.core.models.media.Media
+import org.signal.core.ui.permissions.Permissions
+import org.signal.core.util.logging.Log
+import org.thoughtcrime.securesms.R
+import org.thoughtcrime.securesms.components.location.SignalPlace
+import org.thoughtcrime.securesms.contactshare.Contact
+import org.thoughtcrime.securesms.contactshare.ContactShareActivity
+import org.thoughtcrime.securesms.contactshare.SharedContactSource
+import org.thoughtcrime.securesms.conversation.MessageSendType
+import org.thoughtcrime.securesms.conversation.colors.ChatColors
+import org.thoughtcrime.securesms.giph.ui.GiphyActivity
+import org.thoughtcrime.securesms.maps.PlacePickerActivity
+import org.thoughtcrime.securesms.mediasend.MediaSendActivityResult
+import org.thoughtcrime.securesms.mediasend.MediaSendLauncher
+import org.thoughtcrime.securesms.recipients.RecipientId
+import org.thoughtcrime.securesms.util.RemoteConfig
+
+/**
+ * This encapsulates the logic for interacting with other activities used throughout a conversation. The gist
+ * is to use this to launch the various activities and use the [Callbacks] to provide strongly-typed results.
+ * It is intended to replace the need for [android.app.Activity.onActivityResult].
+ *
+ * Note, not all activity results will live here but this should handle most of the basic cases. More advance
+ * usages like [AddToContactsContract] can be split out into their own [ActivityResultContract] implementations.
+ */
+class ConversationActivityResultContracts(private val fragment: Fragment, private val callbacks: Callbacks) {
+
+  companion object {
+    private val TAG = Log.tag(ConversationActivityResultContracts::class.java)
+  }
+
+  private val contactShareLauncher = fragment.registerForActivityResult(ContactShareEditor) { contacts -> callbacks.onSendContacts(contacts) }
+  private val selectContactLauncher = fragment.registerForActivityResult(SelectContact) { contacts -> callbacks.onSendContacts(contacts) }
+  private val systemSelectContactLauncher = fragment.registerForActivityResult(SystemSelectContact) { source -> callbacks.onContactSelect(source) }
+  private val mediaSelectionLauncher = fragment.registerForActivityResult(MediaSelection) { result -> callbacks.onMediaSend(result) }
+  private val gifSearchLauncher = fragment.registerForActivityResult(GifSearch) { result -> callbacks.onMediaSend(result) }
+  private val mediaGalleryLauncher = fragment.registerForActivityResult(MediaGallery) { result -> callbacks.onMediaSend(result) }
+  private val selectLocationLauncher = fragment.registerForActivityResult(SelectLocation) { result -> callbacks.onLocationSelected(result?.place, result?.uri) }
+  private val selectFileLauncher = fragment.registerForActivityResult(SelectFile) { result -> callbacks.onFileSelected(result) }
+  private val cameraLauncher = fragment.registerForActivityResult(MediaCapture) { result -> callbacks.onMediaSend(result) }
+
+  fun launchVCardShareEditor(uri: Uri, recipientId: RecipientId) {
+    contactShareLauncher.launch(SharedContactSource.VCard(uri) to recipientId)
+  }
+
+  fun launchContactShareEditor(source: SharedContactSource, recipientId: RecipientId) {
+    contactShareLauncher.launch(source to recipientId)
+  }
+
+  fun launchSelectContact(recipientId: RecipientId) {
+    if (RemoteConfig.contactSharingV2) {
+      // No permission gate on purpose. The new picker shows Signal connections without contacts
+      // permission and prompts for it inline, so asking in front of it would block a screen that
+      // works without it.
+      selectContactLauncher.launch(recipientId)
+    } else {
+      Permissions
+        .with(fragment)
+        .request(Manifest.permission.READ_CONTACTS)
+        .ifNecessary()
+        .withPermanentDenialDialog(fragment.getString(R.string.AttachmentManager_signal_requires_contacts_permission_in_order_to_attach_contact_information))
+        .onAllGranted { systemSelectContactLauncher.launch(Unit) }
+        .execute()
+    }
+  }
+
+  fun launchGallery(recipientId: RecipientId, text: CharSequence?, isReply: Boolean) {
+    mediaGalleryLauncher.launch(MediaSelectionInput(emptyList(), recipientId, text, isReply))
+  }
+
+  fun launchCamera(recipientId: RecipientId, isReply: Boolean) {
+    cameraLauncher.launch(MediaSelectionInput(emptyList(), recipientId, null, isReply))
+    fragment.requireActivity().overridePendingTransition(R.anim.camera_slide_from_bottom, R.anim.stationary)
+  }
+
+  fun launchMediaEditor(mediaList: List<Media>, recipientId: RecipientId, text: CharSequence?) {
+    mediaSelectionLauncher.launch(MediaSelectionInput(mediaList, recipientId, text))
+  }
+
+  fun launchGifSearch(recipientId: RecipientId, text: CharSequence?) {
+    gifSearchLauncher.launch(GifSearchInput(recipientId, text))
+  }
+
+  fun launchSelectLocation(chatColors: ChatColors) {
+    if (Permissions.hasAny(fragment.requireContext(), Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) {
+      selectLocationLauncher.launch(chatColors)
+    } else {
+      Permissions.with(fragment)
+        .request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        .ifNecessary()
+        .withRationaleDialog(fragment.getString(R.string.AttachmentManager_signal_allow_access_location), fragment.getString(R.string.AttachmentManager_signal_allow_signal_access_location), R.drawable.symbol_location_white_24)
+        .withPermanentDenialDialog(fragment.getString(R.string.AttachmentManager_signal_requires_location_information_in_order_to_attach_a_location), null, R.string.AttachmentManager_signal_allow_access_location, R.string.AttachmentManager_signal_to_send_location, fragment.parentFragmentManager)
+        .onAnyDenied { Toast.makeText(fragment.requireContext(), R.string.AttachmentManager_signal_needs_location_access, Toast.LENGTH_LONG).show() }
+        .onSomeGranted { selectLocationLauncher.launch(chatColors) }
+        .execute()
+    }
+  }
+
+  fun launchSelectFile(): Boolean {
+    try {
+      selectFileLauncher.launch(SelectFile.SelectFileMode.DOCUMENT)
+      return true
+    } catch (e: ActivityNotFoundException) {
+      Log.w(TAG, "couldn't complete ACTION_OPEN_DOCUMENT, no activity found. falling back.")
+    }
+
+    try {
+      selectFileLauncher.launch(SelectFile.SelectFileMode.CONTENT)
+      return true
+    } catch (e: ActivityNotFoundException) {
+      Log.w(TAG, "couldn't complete ACTION_GET_CONTENT intent, no activity found. falling back.")
+    }
+
+    return false
+  }
+
+  private object MediaSelection : ActivityResultContract<MediaSelectionInput, MediaSendActivityResult?>() {
+    override fun createIntent(context: Context, input: MediaSelectionInput): Intent {
+      val (media, recipientId, text) = input
+      return MediaSendLauncher.editor(context, media, recipientId, text)
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): MediaSendActivityResult? {
+      return MediaSendLauncher.parseResult(resultCode, intent)
+    }
+  }
+
+  private object MediaCapture : ActivityResultContract<MediaSelectionInput, MediaSendActivityResult?>() {
+    override fun createIntent(context: Context, input: MediaSelectionInput): Intent {
+      val (_, recipientId, _, isReply) = input
+      return MediaSendLauncher.camera(context, recipientId, isReply)
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): MediaSendActivityResult? {
+      return MediaSendLauncher.parseResult(resultCode, intent)
+    }
+  }
+
+  private object MediaGallery : ActivityResultContract<MediaSelectionInput, MediaSendActivityResult?>() {
+    override fun createIntent(context: Context, input: MediaSelectionInput): Intent {
+      val (media, recipientId, text, isReply) = input
+      return MediaSendLauncher.gallery(context, media, recipientId, text, isReply)
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): MediaSendActivityResult? {
+      return MediaSendLauncher.parseResult(resultCode, intent)
+    }
+  }
+
+  /**
+   * Always the new editor, whichever picker fed it. While [RemoteConfig.contactSharingV2] is off it
+   * leaves the Signal identity off new cards, so the old picker cannot share an ACI.
+   */
+  private object ContactShareEditor : ActivityResultContract<Pair<SharedContactSource, RecipientId>, List<Contact>>() {
+    override fun createIntent(context: Context, input: Pair<SharedContactSource, RecipientId>): Intent {
+      val (source, recipientId) = input
+      return ContactShareActivity.createShareIntent(context, source, recipientId)
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): List<Contact> {
+      return if (resultCode == Activity.RESULT_OK) {
+        intent?.let { IntentCompat.getParcelableArrayListExtra(intent, ContactShareActivity.KEY_CONTACTS, Contact::class.java) } ?: emptyList()
+      } else {
+        emptyList()
+      }
+    }
+  }
+
+  /** The system contact picker, still used while [RemoteConfig.contactSharingV2] is off. */
+  private object SystemSelectContact : ActivityResultContract<Unit, SharedContactSource?>() {
+    override fun createIntent(context: Context, input: Unit): Intent {
+      return Intent(Intent.ACTION_PICK, ContactsContract.Contacts.CONTENT_URI)
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): SharedContactSource? {
+      return if (resultCode == Activity.RESULT_OK) {
+        intent?.data?.let { SharedContactSource.AddressBook(it) }
+      } else {
+        null
+      }
+    }
+  }
+
+  private object SelectContact : ActivityResultContract<RecipientId, List<Contact>>() {
+    override fun createIntent(context: Context, input: RecipientId): Intent {
+      return ContactShareActivity.createSelectContactIntent(context, input)
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): List<Contact> {
+      return ContactShareEditor.parseResult(resultCode, intent)
+    }
+  }
+
+  private object GifSearch : ActivityResultContract<GifSearchInput, MediaSendActivityResult?>() {
+    override fun createIntent(context: Context, input: GifSearchInput): Intent {
+      return Intent(context, GiphyActivity::class.java).apply {
+        putExtra(GiphyActivity.EXTRA_IS_MMS, false)
+        putExtra(GiphyActivity.EXTRA_RECIPIENT_ID, input.recipientId)
+        putExtra(GiphyActivity.EXTRA_TRANSPORT, MessageSendType.SignalMessageSendType)
+        putExtra(GiphyActivity.EXTRA_TEXT, input.text)
+      }
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): MediaSendActivityResult? {
+      return if (resultCode == Activity.RESULT_OK) {
+        intent?.let { MediaSendActivityResult.fromData(intent) }
+      } else {
+        null
+      }
+    }
+  }
+
+  private object SelectLocation : ActivityResultContract<ChatColors, SelectLocationOutput?>() {
+    override fun createIntent(context: Context, input: ChatColors): Intent {
+      return Intent(context, PlacePickerActivity::class.java)
+        .putExtra(PlacePickerActivity.KEY_CHAT_COLOR, input.asSingleColor())
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): SelectLocationOutput? {
+      return if (resultCode == Activity.RESULT_OK) {
+        intent?.data?.let { uri -> SelectLocationOutput(SignalPlace(PlacePickerActivity.addressFromData(intent)), uri) }
+      } else {
+        null
+      }
+    }
+  }
+
+  private object SelectFile : ActivityResultContract<SelectFile.SelectFileMode, Uri?>() {
+    override fun createIntent(context: Context, input: SelectFileMode): Intent {
+      return Intent().apply {
+        type = "*/*"
+
+        action = when (input) {
+          SelectFileMode.DOCUMENT -> Intent.ACTION_OPEN_DOCUMENT
+          SelectFileMode.CONTENT -> Intent.ACTION_GET_CONTENT
+        }
+      }
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
+      return if (resultCode == Activity.RESULT_OK) {
+        intent?.data
+      } else {
+        null
+      }
+    }
+
+    enum class SelectFileMode {
+      DOCUMENT,
+      CONTENT
+    }
+  }
+
+  private data class MediaSelectionInput(val media: List<Media>, val recipientId: RecipientId, val text: CharSequence?, val isReply: Boolean = false)
+
+  private data class GifSearchInput(val recipientId: RecipientId, val text: CharSequence?)
+
+  private data class SelectLocationOutput(val place: SignalPlace, val uri: Uri)
+
+  interface Callbacks {
+    fun onSendContacts(contacts: List<Contact>)
+    fun onMediaSend(result: MediaSendActivityResult?)
+    fun onContactSelect(source: SharedContactSource?)
+    fun onLocationSelected(place: SignalPlace?, uri: Uri?)
+    fun onFileSelected(uri: Uri?)
+  }
+}
