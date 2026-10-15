@@ -311,23 +311,23 @@ android {
 
     val targetAbi: String? = project.findProperty("targetAbi") as? String
 
-    ndk {
-      if (targetAbi != null) {
+    if (targetAbi != null) {
+      ndk {
         abiFilters += listOf(targetAbi)
-      } else {
+      }
+      splits {
+        abi {
+          isEnable = false
+        }
+      }
+    } else {
+      ndk {
         abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
       }
-    }
-    resourceConfigurations += listOf()
-
-    splits {
-      abi {
-        isEnable = !project.hasProperty("generateBaselineProfile")
-        reset()
-        if (targetAbi != null) {
-          include(targetAbi)
-          isUniversalApk = false
-        } else {
+      splits {
+        abi {
+          isEnable = !project.hasProperty("generateBaselineProfile")
+          reset()
           include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
           isUniversalApk = true
         }
