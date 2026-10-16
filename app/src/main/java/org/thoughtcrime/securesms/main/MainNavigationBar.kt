@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -61,6 +62,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
@@ -69,20 +71,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.graphics.BlendModeColorFilterCompat
-import androidx.core.graphics.BlendModeCompat
-import com.airbnb.lottie.LottieProperty
-import com.airbnb.lottie.compose.LottieAnimation
-import com.airbnb.lottie.compose.LottieCompositionSpec
-import com.airbnb.lottie.compose.rememberLottieComposition
-import com.airbnb.lottie.compose.rememberLottieDynamicProperties
-import com.airbnb.lottie.compose.rememberLottieDynamicProperty
 import org.signal.core.ui.compose.DayNightPreviews
 import org.signal.core.ui.compose.Previews
 import org.signal.core.ui.compose.theme.SignalTheme
 import org.thoughtcrime.securesms.R
 
-private val LOTTIE_SIZE = 24.dp
+private val NAV_ICON_SIZE = 24.dp
 
 /**
  * Chats list bottom floating capsule navigation bar.
@@ -374,25 +368,17 @@ private fun NavigationDestinationIcon(
   selected: Boolean,
   tint: Color = MaterialTheme.colorScheme.onSurface
 ) {
-  val dynamicProperties = rememberLottieDynamicProperties(
-    rememberLottieDynamicProperty(
-      property = LottieProperty.COLOR_FILTER,
-      value = BlendModeColorFilterCompat.createBlendModeColorFilterCompat(
-        tint.toArgb(),
-        BlendModeCompat.SRC_ATOP
-      ),
-      keyPath = arrayOf("**")
-    )
-  )
+  val iconRes = when (destination) {
+    MainListRoute.Chats, MainListRoute.Archive -> if (selected) R.drawable.symbol_chat_fill_24 else R.drawable.symbol_chat_24
+    MainListRoute.Calls -> if (selected) R.drawable.symbol_phone_fill_white_24 else R.drawable.symbol_phone_outline_24
+    MainListRoute.Stories -> if (selected) R.drawable.symbol_stories_fill_24 else R.drawable.symbol_stories_24
+  }
 
-  val composition by rememberLottieComposition(LottieCompositionSpec.RawRes(destination.icon))
-  val progress by animateFloatAsState(targetValue = if (selected) 1f else 0f, animationSpec = tween(durationMillis = composition?.duration?.toInt() ?: 0))
-
-  LottieAnimation(
-    composition = composition,
-    progress = { if (selected) progress else 0f },
-    dynamicProperties = dynamicProperties,
-    modifier = Modifier.size(LOTTIE_SIZE)
+  Icon(
+    painter = painterResource(id = iconRes),
+    contentDescription = stringResource(destination.contentDescription),
+    tint = tint,
+    modifier = Modifier.size(NAV_ICON_SIZE)
   )
 }
 

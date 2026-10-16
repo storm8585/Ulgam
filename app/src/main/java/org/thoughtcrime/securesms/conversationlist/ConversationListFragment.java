@@ -1348,9 +1348,6 @@ public class ConversationListFragment extends MainFragment implements Conversati
   void updateEmptyState(boolean isConversationEmpty) {
     if (isConversationEmpty) {
       Log.i(TAG, "Received an empty data set.");
-
-      SignalStore.onboarding().setShowNewGroup(true);
-      SignalStore.onboarding().setShowInviteFriends(true);
     }
   }
 

@@ -11,11 +11,13 @@ import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
@@ -30,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -67,18 +70,6 @@ fun MainFloatingActionButtons(
   modifier: Modifier = Modifier,
   navigationType: NavigationType = NavigationType.rememberNavigationType()
 ) {
-  val boxHeightDp = (ACTION_BUTTON_SIZE * 2 + ACTION_BUTTON_SPACING)
-  val boxHeightPx = with(LocalDensity.current) {
-    boxHeightDp.toPx().roundToInt()
-  }
-
-  val primaryButtonAlignment = remember(navigationType) {
-    when (navigationType) {
-      NavigationType.RAIL -> Alignment.TopCenter
-      NavigationType.BAR -> Alignment.BottomCenter
-    }
-  }
-
   val shadowElevation: Dp = remember(navigationType) {
     when (navigationType) {
       NavigationType.RAIL -> 0.dp
@@ -87,77 +78,14 @@ fun MainFloatingActionButtons(
   }
 
   Box(
-    modifier = modifier
-      .padding(ACTION_BUTTON_SPACING)
-      .height(boxHeightDp)
+    modifier = modifier.padding(ACTION_BUTTON_SPACING)
   ) {
-    SecondaryActionButton(
+    PrimaryActionButton(
       destination = destination,
-      boxHeightPx = boxHeightPx,
+      onNewChatClick = callback::onNewChatClick,
       onCameraClick = callback::onCameraClick,
+      onNewCallClick = callback::onNewCallClick,
       elevation = shadowElevation
-    )
-
-    Box(
-      modifier = Modifier.align(primaryButtonAlignment)
-    ) {
-      PrimaryActionButton(
-        destination = destination,
-        onNewChatClick = callback::onNewChatClick,
-        onCameraClick = callback::onCameraClick,
-        onNewCallClick = callback::onNewCallClick,
-        elevation = shadowElevation
-      )
-    }
-  }
-}
-
-@Composable
-private fun BoxScope.SecondaryActionButton(
-  destination: MainListRoute,
-  boxHeightPx: Int,
-  elevation: Dp,
-  onCameraClick: (MainListRoute) -> Unit
-) {
-  val navigationType = NavigationType.rememberNavigationType()
-  val secondaryButtonAlignment = remember(navigationType) {
-    when (navigationType) {
-      NavigationType.RAIL -> Alignment.BottomCenter
-      NavigationType.BAR -> Alignment.TopCenter
-    }
-  }
-
-  val offsetYProvider: (Int) -> Int = remember(navigationType) {
-    when (navigationType) {
-      NavigationType.RAIL -> {
-        { it - boxHeightPx }
-      }
-      NavigationType.BAR -> {
-        { boxHeightPx - it }
-      }
-    }
-  }
-
-  AnimatedVisibility(
-    visible = destination == MainListRoute.Chats || destination == MainListRoute.Archive,
-    modifier = Modifier.align(secondaryButtonAlignment),
-    enter = slideInVertically(initialOffsetY = offsetYProvider),
-    exit = slideOutVertically(targetOffsetY = offsetYProvider)
-  ) {
-    val animatedElevation by transition.animateDp(targetValueByState = { if (it == EnterExitState.Visible) elevation else 0.dp })
-
-    CameraButton(
-      colors = IconButtonDefaults.filledTonalIconButtonColors().copy(
-        containerColor = when (navigationType) {
-          NavigationType.RAIL -> MaterialTheme.colorScheme.surface
-          NavigationType.BAR -> SignalTheme.colors.colorSurface2
-        },
-        contentColor = MaterialTheme.colorScheme.onSurface
-      ),
-      onClick = {
-        onCameraClick(MainListRoute.Chats)
-      },
-      shadowElevation = animatedElevation
     )
   }
 }
@@ -181,9 +109,16 @@ private fun PrimaryActionButton(
     }
   }
 
+  val isDark = isSystemInDarkTheme()
+  val containerColor = if (isDark) Color(0xFF388E68) else Color(0xFF2D6A4F)
+
   MainFloatingActionButton(
     onClick = onClick,
     shadowElevation = elevation,
+    colors = IconButtonDefaults.filledIconButtonColors(
+      containerColor = containerColor,
+      contentColor = Color.White
+    ),
     icon = {
       AnimatedContent(destination) { targetState ->
         val (icon, contentDescriptionId) = when (targetState) {
@@ -195,31 +130,11 @@ private fun PrimaryActionButton(
 
         Icon(
           imageVector = ImageVector.vectorResource(icon),
-          contentDescription = stringResource(contentDescriptionId)
+          contentDescription = stringResource(contentDescriptionId),
+          tint = Color.White
         )
       }
     }
-  )
-}
-
-@Composable
-private fun CameraButton(
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-  shadowElevation: Dp = 4.dp,
-  colors: IconButtonColors = IconButtonDefaults.filledTonalIconButtonColors()
-) {
-  MainFloatingActionButton(
-    onClick = onClick,
-    icon = {
-      Icon(
-        imageVector = SignalIcons.Camera.imageVector,
-        contentDescription = stringResource(R.string.conversation_list_fragment__open_camera_description)
-      )
-    },
-    colors = colors,
-    modifier = modifier,
-    shadowElevation = shadowElevation
   )
 }
 
@@ -233,10 +148,10 @@ private fun MainFloatingActionButton(
 ) {
   FilledTonalIconButton(
     onClick = onClick,
-    shape = RoundedCornerShape(18.dp),
+    shape = CircleShape,
     modifier = modifier
       .size(ACTION_BUTTON_SIZE)
-      .shadow(shadowElevation, RoundedCornerShape(18.dp)),
+      .shadow(shadowElevation, CircleShape),
     enabled = true,
     colors = colors
   ) {

@@ -87,10 +87,7 @@ fun MegaphoneComponent(
   }
 
   when (megaphone.style) {
-    Megaphone.Style.ONBOARDING -> OnboardingMegaphone(
-      megaphoneActionController = megaphoneActionController,
-      modifier = modifier.fillMaxWidth()
-    )
+    Megaphone.Style.ONBOARDING -> Unit
 
     Megaphone.Style.BASIC -> BasicMegaphone(
       megaphone = megaphone,

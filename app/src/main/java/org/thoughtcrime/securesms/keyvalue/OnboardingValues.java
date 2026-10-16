@@ -21,11 +21,11 @@ public final class OnboardingValues extends SignalStoreValues {
 
   @Override
   void onFirstEverAppLaunch() {
-    putBoolean(SHOW_NEW_GROUP, true);
-    putBoolean(SHOW_INVITE_FRIENDS, true);
-    putBoolean(SHOW_APPEARANCE, true);
-    putBoolean(SHOW_ADD_PHOTO, true);
-    putBoolean(SHOW_SET_UP_USERNAME, true);
+    putBoolean(SHOW_NEW_GROUP, false);
+    putBoolean(SHOW_INVITE_FRIENDS, false);
+    putBoolean(SHOW_APPEARANCE, false);
+    putBoolean(SHOW_ADD_PHOTO, false);
+    putBoolean(SHOW_SET_UP_USERNAME, false);
   }
 
   @Override
@@ -42,11 +42,7 @@ public final class OnboardingValues extends SignalStoreValues {
   }
 
   public boolean hasOnboarding(@NonNull Context context) {
-    return shouldShowNewGroup()       ||
-           shouldShowInviteFriends()  ||
-           shouldShowAppearance()     ||
-           shouldShowAddPhoto()       ||
-           shouldShowSetUpUsername();
+    return false;
   }
 
   public void setShowNewGroup(boolean value) {
