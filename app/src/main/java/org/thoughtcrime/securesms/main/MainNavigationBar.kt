@@ -52,6 +52,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.colorResource
@@ -89,26 +90,26 @@ fun MainNavigationBar(
   Box(
     modifier = Modifier
       .fillMaxWidth()
-      .padding(horizontal = 24.dp, vertical = 6.dp),
+      .padding(horizontal = 24.dp, vertical = 8.dp),
     contentAlignment = Alignment.Center
   ) {
     Surface(
-      shape = RoundedCornerShape(percent = 50),
+      shape = RoundedCornerShape(28.dp),
       color = SignalTheme.colors.colorSurface2,
-      shadowElevation = 0.dp,
+      shadowElevation = 2.dp,
       tonalElevation = 0.dp,
       border = BorderStroke(
         width = 1.dp,
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
       ),
       modifier = Modifier
-        .widthIn(min = 230.dp, max = 280.dp)
-        .height(if (state.compact) 46.dp else 56.dp)
+        .width(328.dp)
+        .height(if (state.compact) 48.dp else 56.dp)
     ) {
       Row(
         modifier = Modifier
           .fillMaxSize()
-          .padding(horizontal = 6.dp, vertical = 4.dp),
+          .padding(4.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
       ) {
@@ -152,7 +153,7 @@ fun MainNavigationBar(
             label = "contentScale"
           )
           val activeContentColor by animateColorAsState(
-            targetValue = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            targetValue = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
             label = "tabContentColor"
           )
 
@@ -160,6 +161,7 @@ fun MainNavigationBar(
             modifier = Modifier
               .weight(1f)
               .fillMaxHeight()
+              .clip(RoundedCornerShape(24.dp))
               .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
@@ -178,8 +180,8 @@ fun MainNavigationBar(
                     scaleY = capsuleScaleY
                     alpha = capsuleAlpha
                   }
-                  .clip(RoundedCornerShape(percent = 50))
-                  .background(MaterialTheme.colorScheme.secondaryContainer)
+                  .clip(RoundedCornerShape(24.dp))
+                  .background(colorResource(R.color.signal_accent_primary))
               )
             }
 
@@ -196,16 +198,17 @@ fun MainNavigationBar(
             ) {
               NavigationDestinationIcon(
                 destination = destination,
-                selected = selected
+                selected = selected,
+                tint = activeContentColor
               )
 
               if (!state.compact) {
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(1.dp))
                 Text(
                   text = stringResource(destination.label),
                   style = MaterialTheme.typography.labelSmall.copy(
                     fontSize = 11.sp,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
                   ),
                   color = activeContentColor,
                   maxLines = 1
@@ -374,13 +377,14 @@ private fun BoxScope.NavigationRailCountIndicator(
 @Composable
 private fun NavigationDestinationIcon(
   destination: MainListRoute,
-  selected: Boolean
+  selected: Boolean,
+  tint: Color = MaterialTheme.colorScheme.onSurface
 ) {
   val dynamicProperties = rememberLottieDynamicProperties(
     rememberLottieDynamicProperty(
       property = LottieProperty.COLOR_FILTER,
       value = BlendModeColorFilterCompat.createBlendModeColorFilterCompat(
-        MaterialTheme.colorScheme.onSurface.hashCode(),
+        tint.toArgb(),
         BlendModeCompat.SRC_ATOP
       ),
       keyPath = arrayOf("**")
