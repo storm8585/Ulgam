@@ -6,7 +6,9 @@
 package org.thoughtcrime.securesms.main
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -49,6 +51,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.colorResource
@@ -92,8 +95,8 @@ fun MainNavigationBar(
     Surface(
       shape = RoundedCornerShape(percent = 50),
       color = SignalTheme.colors.colorSurface2,
-      tonalElevation = 4.dp,
-      shadowElevation = 8.dp,
+      shadowElevation = 0.dp,
+      tonalElevation = 0.dp,
       border = BorderStroke(
         width = 1.dp,
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
@@ -118,48 +121,96 @@ fun MainNavigationBar(
           }
 
           val selected = state.currentListLocation == destination
-          val activeBackgroundColor by animateColorAsState(
-            targetValue = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-            label = "tabBackground"
+
+          val capsuleScaleX by animateFloatAsState(
+            targetValue = if (selected) 1f else 0.45f,
+            animationSpec = spring(
+              dampingRatio = Spring.DampingRatioMediumBouncy,
+              stiffness = Spring.StiffnessMediumLow
+            ),
+            label = "capsuleScaleX"
+          )
+          val capsuleScaleY by animateFloatAsState(
+            targetValue = if (selected) 1f else 0.7f,
+            animationSpec = spring(
+              dampingRatio = Spring.DampingRatioMediumBouncy,
+              stiffness = Spring.StiffnessMediumLow
+            ),
+            label = "capsuleScaleY"
+          )
+          val capsuleAlpha by animateFloatAsState(
+            targetValue = if (selected) 1f else 0f,
+            animationSpec = tween(durationMillis = 150),
+            label = "capsuleAlpha"
+          )
+          val contentScale by animateFloatAsState(
+            targetValue = if (selected) 1f else 0.94f,
+            animationSpec = spring(
+              dampingRatio = Spring.DampingRatioMediumBouncy,
+              stiffness = Spring.StiffnessMediumLow
+            ),
+            label = "contentScale"
           )
           val activeContentColor by animateColorAsState(
             targetValue = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
             label = "tabContentColor"
           )
 
-          Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+          Box(
             modifier = Modifier
               .weight(1f)
               .fillMaxHeight()
-              .clip(RoundedCornerShape(percent = 50))
-              .background(activeBackgroundColor)
               .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
               ) {
                 onDestinationSelected(destination)
               }
-              .drawNavigationBarBadge(count = badgeCount, compact = state.compact)
-              .padding(horizontal = 4.dp, vertical = 2.dp)
+              .drawNavigationBarBadge(count = badgeCount, compact = state.compact),
+            contentAlignment = Alignment.Center
           ) {
-            NavigationDestinationIcon(
-              destination = destination,
-              selected = selected
-            )
-
-            if (!state.compact) {
-              Spacer(modifier = Modifier.height(2.dp))
-              Text(
-                text = stringResource(destination.label),
-                style = MaterialTheme.typography.labelSmall.copy(
-                  fontSize = 11.sp,
-                  fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-                ),
-                color = activeContentColor,
-                maxLines = 1
+            if (capsuleAlpha > 0.005f) {
+              Box(
+                modifier = Modifier
+                  .fillMaxSize()
+                  .graphicsLayer {
+                    scaleX = capsuleScaleX
+                    scaleY = capsuleScaleY
+                    alpha = capsuleAlpha
+                  }
+                  .clip(RoundedCornerShape(percent = 50))
+                  .background(MaterialTheme.colorScheme.secondaryContainer)
               )
+            }
+
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.Center,
+              modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                  scaleX = contentScale
+                  scaleY = contentScale
+                }
+                .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+              NavigationDestinationIcon(
+                destination = destination,
+                selected = selected
+              )
+
+              if (!state.compact) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                  text = stringResource(destination.label),
+                  style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 11.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                  ),
+                  color = activeContentColor,
+                  maxLines = 1
+                )
+              }
             }
           }
         }
