@@ -7,6 +7,7 @@ package org.thoughtcrime.securesms.main
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -14,6 +15,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -88,6 +92,28 @@ fun MainNavigationBar(
   state: MainNavigationBarState,
   onDestinationSelected: (MainListRoute) -> Unit
 ) {
+  val isDark = isSystemInDarkTheme()
+  val pineGreen = if (isDark) Color(0xFF52B788) else Color(0xFF2D6A4F)
+  val unselectedColor = if (isDark) Color(0xFF8E9792) else Color(0xFF6B7770)
+  val pillBgColor = pineGreen.copy(alpha = if (isDark) 0.22f else 0.16f)
+
+  val selectedIndex = remember(state.destinations, state.currentListLocation) {
+    val idx = state.destinations.indexOf(state.currentListLocation)
+    if (idx >= 0) idx else 0
+  }
+
+  val tabCount = if (state.destinations.isNotEmpty()) state.destinations.size else 3
+  val tabWidth = 320.dp / tabCount
+
+  val animatedOffsetX by animateDpAsState(
+    targetValue = tabWidth * selectedIndex,
+    animationSpec = spring(
+      dampingRatio = 0.72f,
+      stiffness = Spring.StiffnessMediumLow
+    ),
+    label = "appleFluidIndicatorOffset"
+  )
+
   Box(
     modifier = Modifier
       .fillMaxWidth()
@@ -107,113 +133,80 @@ fun MainNavigationBar(
         .width(328.dp)
         .height(if (state.compact) 48.dp else 56.dp)
     ) {
-      Row(
+      Box(
         modifier = Modifier
           .fillMaxSize()
-          .padding(4.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
+          .padding(4.dp)
       ) {
-        state.destinations.forEach { destination ->
-          val badgeCount = when (destination) {
-            MainListRoute.Archive -> error("Not supported")
-            MainListRoute.Chats -> state.chatsCount
-            MainListRoute.Calls -> state.callsCount
-            MainListRoute.Stories -> state.storiesCount
-          }
+        Box(
+          modifier = Modifier
+            .offset(x = animatedOffsetX)
+            .width(tabWidth)
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(24.dp))
+            .background(pillBgColor)
+        )
 
-          val selected = state.currentListLocation == destination
-
-          val capsuleScaleX by animateFloatAsState(
-            targetValue = if (selected) 1f else 0.45f,
-            animationSpec = spring(
-              dampingRatio = Spring.DampingRatioMediumBouncy,
-              stiffness = Spring.StiffnessMediumLow
-            ),
-            label = "capsuleScaleX"
-          )
-          val capsuleScaleY by animateFloatAsState(
-            targetValue = if (selected) 1f else 0.7f,
-            animationSpec = spring(
-              dampingRatio = Spring.DampingRatioMediumBouncy,
-              stiffness = Spring.StiffnessMediumLow
-            ),
-            label = "capsuleScaleY"
-          )
-          val capsuleAlpha by animateFloatAsState(
-            targetValue = if (selected) 1f else 0f,
-            animationSpec = tween(durationMillis = 150),
-            label = "capsuleAlpha"
-          )
-          val contentScale by animateFloatAsState(
-            targetValue = if (selected) 1f else 0.94f,
-            animationSpec = spring(
-              dampingRatio = Spring.DampingRatioMediumBouncy,
-              stiffness = Spring.StiffnessMediumLow
-            ),
-            label = "contentScale"
-          )
-          val activeContentColor by animateColorAsState(
-            targetValue = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-            label = "tabContentColor"
-          )
-
-          Box(
-            modifier = Modifier
-              .weight(1f)
-              .fillMaxHeight()
-              .clip(RoundedCornerShape(24.dp))
-              .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-              ) {
-                onDestinationSelected(destination)
-              }
-              .drawNavigationBarBadge(count = badgeCount, compact = state.compact),
-            contentAlignment = Alignment.Center
-          ) {
-            if (capsuleAlpha > 0.005f) {
-              Box(
-                modifier = Modifier
-                  .fillMaxSize()
-                  .graphicsLayer {
-                    scaleX = capsuleScaleX
-                    scaleY = capsuleScaleY
-                    alpha = capsuleAlpha
-                  }
-                  .clip(RoundedCornerShape(24.dp))
-                  .background(colorResource(R.color.signal_accent_primary))
-              )
+        Row(
+          modifier = Modifier.fillMaxSize(),
+          horizontalArrangement = Arrangement.SpaceEvenly,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          state.destinations.forEach { destination ->
+            val badgeCount = when (destination) {
+              MainListRoute.Archive -> error("Not supported")
+              MainListRoute.Chats -> state.chatsCount
+              MainListRoute.Calls -> state.callsCount
+              MainListRoute.Stories -> state.storiesCount
             }
 
-            Column(
-              horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.Center,
-              modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                  scaleX = contentScale
-                  scaleY = contentScale
-                }
-                .padding(horizontal = 4.dp, vertical = 2.dp)
-            ) {
-              NavigationDestinationIcon(
-                destination = destination,
-                selected = selected,
-                tint = activeContentColor
-              )
+            val selected = state.currentListLocation == destination
+            val activeContentColor by animateColorAsState(
+              targetValue = if (selected) pineGreen else unselectedColor,
+              label = "tabContentColor"
+            )
 
-              if (!state.compact) {
-                Spacer(modifier = Modifier.height(1.dp))
-                Text(
-                  text = stringResource(destination.label),
-                  style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 11.sp,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
-                  ),
-                  color = activeContentColor,
-                  maxLines = 1
-                )
+            Box(
+              modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(24.dp))
+                .clickable(
+                  interactionSource = remember { MutableInteractionSource() },
+                  indication = null
+                ) {
+                  onDestinationSelected(destination)
+                }
+                .drawNavigationBarBadge(count = badgeCount, compact = state.compact),
+              contentAlignment = Alignment.Center
+            ) {
+              Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier
+                  .fillMaxSize()
+                  .padding(horizontal = 4.dp, vertical = 2.dp)
+              ) {
+                key(destination, selected, activeContentColor) {
+                  NavigationDestinationIcon(
+                    destination = destination,
+                    selected = selected,
+                    tint = activeContentColor
+                  )
+                }
+
+                if (!state.compact) {
+                  Spacer(modifier = Modifier.height(1.dp))
+                  Text(
+                    text = stringResource(destination.label),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                      fontSize = 11.sp,
+                      fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
+                    ),
+                    color = activeContentColor,
+                    maxLines = 1
+                  )
+                }
               }
             }
           }
