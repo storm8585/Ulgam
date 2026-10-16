@@ -5,19 +5,28 @@
 
 package org.thoughtcrime.securesms.main
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -34,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -44,10 +54,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.graphics.BlendModeColorFilterCompat
 import androidx.core.graphics.BlendModeCompat
 import com.airbnb.lottie.LottieProperty
@@ -61,10 +73,10 @@ import org.signal.core.ui.compose.Previews
 import org.signal.core.ui.compose.theme.SignalTheme
 import org.thoughtcrime.securesms.R
 
-private val LOTTIE_SIZE = 28.dp
+private val LOTTIE_SIZE = 24.dp
 
 /**
- * Chats list bottom navigation bar.
+ * Chats list bottom floating capsule navigation bar.
  */
 @Composable
 fun MainNavigationBar(
@@ -74,7 +86,7 @@ fun MainNavigationBar(
   Box(
     modifier = Modifier
       .fillMaxWidth()
-      .padding(horizontal = 20.dp, vertical = 6.dp),
+      .padding(horizontal = 24.dp, vertical = 6.dp),
     contentAlignment = Alignment.Center
   ) {
     Surface(
@@ -87,14 +99,15 @@ fun MainNavigationBar(
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
       ),
       modifier = Modifier
-        .fillMaxWidth()
-        .height(if (state.compact) 52.dp else 68.dp)
+        .widthIn(min = 230.dp, max = 280.dp)
+        .height(if (state.compact) 46.dp else 56.dp)
     ) {
-      NavigationBar(
-        containerColor = Color.Transparent,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.fillMaxWidth(),
-        windowInsets = WindowInsets(0, 0, 0, 0)
+      Row(
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(horizontal = 6.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
       ) {
         state.destinations.forEach { destination ->
           val badgeCount = when (destination) {
@@ -105,29 +118,50 @@ fun MainNavigationBar(
           }
 
           val selected = state.currentListLocation == destination
-          NavigationBarItem(
-            selected = selected,
-            icon = {
-              NavigationDestinationIcon(
-                destination = destination,
-                selected = selected
-              )
-            },
-            label = if (state.compact) null else {
-              { NavigationDestinationLabel(destination) }
-            },
-            colors = NavigationBarItemDefaults.colors(
-              selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-              selectedTextColor = MaterialTheme.colorScheme.onSurface,
-              indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
-              unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-              unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-            ),
-            onClick = {
-              onDestinationSelected(destination)
-            },
-            modifier = Modifier.drawNavigationBarBadge(count = badgeCount, compact = state.compact)
+          val activeBackgroundColor by animateColorAsState(
+            targetValue = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+            label = "tabBackground"
           )
+          val activeContentColor by animateColorAsState(
+            targetValue = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            label = "tabContentColor"
+          )
+
+          Column(
+            horizontalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+              .weight(1f)
+              .fillMaxHeight()
+              .clip(RoundedCornerShape(percent = 50))
+              .background(activeBackgroundColor)
+              .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+              ) {
+                onDestinationSelected(destination)
+              }
+              .drawNavigationBarBadge(count = badgeCount, compact = state.compact)
+              .padding(horizontal = 4.dp, vertical = 2.dp)
+          ) {
+            NavigationDestinationIcon(
+              destination = destination,
+              selected = selected
+            )
+
+            if (!state.compact) {
+              Spacer(modifier = Modifier.height(2.dp))
+              Text(
+                text = stringResource(destination.label),
+                style = MaterialTheme.typography.labelSmall.copy(
+                  fontSize = 11.sp,
+                  fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                ),
+                color = activeContentColor,
+                maxLines = 1
+              )
+            }
+          }
         }
       }
     }
@@ -158,11 +192,11 @@ private fun Modifier.drawNavigationBarBadge(count: Int, compact: Boolean): Modif
     }
 
     val xOffsetExtra = with(LocalDensity.current) {
-      4.dp.toPx()
+      2.dp.toPx()
     }
 
     val yOffset = with(LocalDensity.current) {
-      if (compact) 6.dp.toPx() else 10.dp.toPx()
+      2.dp.toPx()
     }
 
     this
