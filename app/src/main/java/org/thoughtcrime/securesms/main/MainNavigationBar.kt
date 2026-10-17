@@ -87,9 +87,9 @@ fun MainNavigationBar(
   onDestinationSelected: (MainListRoute) -> Unit
 ) {
   val isDark = isSystemInDarkTheme()
-  val pineGreen = if (isDark) Color(0xFF52B788) else Color(0xFF2D6A4F)
+  val selectedColor = Color.White
   val unselectedColor = if (isDark) Color(0xFF8E9792) else Color(0xFF6B7770)
-  val pillBgColor = pineGreen.copy(alpha = if (isDark) 0.22f else 0.16f)
+  val pillBgColor = Color.White.copy(alpha = if (isDark) 0.16f else 0.18f)
 
   val selectedIndex = remember(state.destinations, state.currentListLocation) {
     val idx = state.destinations.indexOf(state.currentListLocation)
@@ -102,8 +102,8 @@ fun MainNavigationBar(
   val animatedOffsetX by animateDpAsState(
     targetValue = tabWidth * selectedIndex,
     animationSpec = spring(
-      dampingRatio = 0.72f,
-      stiffness = Spring.StiffnessMediumLow
+      dampingRatio = 0.82f,
+      stiffness = Spring.StiffnessMedium
     ),
     label = "appleFluidIndicatorOffset"
   )
@@ -117,7 +117,7 @@ fun MainNavigationBar(
     Surface(
       shape = RoundedCornerShape(28.dp),
       color = SignalTheme.colors.colorSurface2,
-      shadowElevation = 2.dp,
+      shadowElevation = 0.dp,
       tonalElevation = 0.dp,
       border = BorderStroke(
         width = 1.dp,
@@ -134,9 +134,11 @@ fun MainNavigationBar(
       ) {
         Box(
           modifier = Modifier
-            .offset(x = animatedOffsetX)
             .width(tabWidth)
             .fillMaxHeight()
+            .graphicsLayer {
+              translationX = animatedOffsetX.toPx()
+            }
             .clip(RoundedCornerShape(24.dp))
             .background(pillBgColor)
         )
@@ -155,56 +157,78 @@ fun MainNavigationBar(
             }
 
             val selected = state.currentListLocation == destination
-            val activeContentColor by animateColorAsState(
-              targetValue = if (selected) pineGreen else unselectedColor,
-              label = "tabContentColor"
-            )
 
-            Box(
+            NavigationBarTabItem(
+              destination = destination,
+              selected = selected,
+              badgeCount = badgeCount,
+              compact = state.compact,
+              selectedColor = selectedColor,
+              unselectedColor = unselectedColor,
+              onClick = { onDestinationSelected(destination) },
               modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
-                .clip(RoundedCornerShape(24.dp))
-                .clickable(
-                  interactionSource = remember { MutableInteractionSource() },
-                  indication = null
-                ) {
-                  onDestinationSelected(destination)
-                }
-                .drawNavigationBarBadge(count = badgeCount, compact = state.compact),
-              contentAlignment = Alignment.Center
-            ) {
-              Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier
-                  .fillMaxSize()
-                  .padding(horizontal = 4.dp, vertical = 2.dp)
-              ) {
-                key(destination, selected, activeContentColor) {
-                  NavigationDestinationIcon(
-                    destination = destination,
-                    selected = selected,
-                    tint = activeContentColor
-                  )
-                }
-
-                if (!state.compact) {
-                  Spacer(modifier = Modifier.height(1.dp))
-                  Text(
-                    text = stringResource(destination.label),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                      fontSize = 11.sp,
-                      fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
-                    ),
-                    color = activeContentColor,
-                    maxLines = 1
-                  )
-                }
-              }
-            }
+            )
           }
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun NavigationBarTabItem(
+  destination: MainListRoute,
+  selected: Boolean,
+  badgeCount: Int,
+  compact: Boolean,
+  selectedColor: Color,
+  unselectedColor: Color,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier
+) {
+  val activeContentColor by animateColorAsState(
+    targetValue = if (selected) selectedColor else unselectedColor,
+    animationSpec = tween(durationMillis = 180),
+    label = "tabContentColor"
+  )
+
+  Box(
+    modifier = modifier
+      .clip(RoundedCornerShape(24.dp))
+      .clickable(
+        interactionSource = remember { MutableInteractionSource() },
+        indication = null,
+        onClick = onClick
+      )
+      .drawNavigationBarBadge(count = badgeCount, compact = compact),
+    contentAlignment = Alignment.Center
+  ) {
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 4.dp, vertical = 2.dp)
+    ) {
+      NavigationDestinationIcon(
+        destination = destination,
+        selected = selected,
+        tint = activeContentColor
+      )
+
+      if (!compact) {
+        Spacer(modifier = Modifier.height(1.dp))
+        Text(
+          text = stringResource(destination.label),
+          style = MaterialTheme.typography.labelSmall.copy(
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
+          ),
+          color = activeContentColor,
+          maxLines = 1
+        )
       }
     }
   }

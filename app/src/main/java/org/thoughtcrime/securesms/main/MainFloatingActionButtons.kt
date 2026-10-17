@@ -70,6 +70,10 @@ fun MainFloatingActionButtons(
   modifier: Modifier = Modifier,
   navigationType: NavigationType = NavigationType.rememberNavigationType()
 ) {
+  if (navigationType != NavigationType.RAIL) {
+    return
+  }
+
   val shadowElevation: Dp = remember(navigationType) {
     when (navigationType) {
       NavigationType.RAIL -> 0.dp
