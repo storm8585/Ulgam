@@ -25,6 +25,6 @@ data class MainNavigationBarState(
      * Every tab there is, in display order. The archive is not among them: it is a list within chats
      * rather than a tab of its own.
      */
-    val ALL_DESTINATIONS = listOf(MainListRoute.Chats, MainListRoute.Calls, MainListRoute.Stories)
+    val ALL_DESTINATIONS = listOf(MainListRoute.Chats, MainListRoute.Calls, MainListRoute.Stories, MainListRoute.Settings)
   }
 }

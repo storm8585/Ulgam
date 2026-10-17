@@ -110,6 +110,7 @@ private fun PrimaryActionButton(
       MainListRoute.Stories -> {
         { onCameraClick(destination) }
       }
+      MainListRoute.Settings -> ({})
     }
   }
 
@@ -130,6 +131,7 @@ private fun PrimaryActionButton(
           MainListRoute.Chats -> CoreUiR.drawable.symbol_edit_24 to R.string.conversation_list_fragment__fab_content_description
           MainListRoute.Calls -> R.drawable.symbol_phone_plus_24 to R.string.CallLogFragment__start_a_new_call
           MainListRoute.Stories -> CoreUiR.drawable.symbol_camera_24 to R.string.conversation_list_fragment__open_camera_description
+          MainListRoute.Settings -> CoreUiR.drawable.symbol_settings_android_24 to R.string.text_secure_normal__menu_settings
         }
 
         Icon(

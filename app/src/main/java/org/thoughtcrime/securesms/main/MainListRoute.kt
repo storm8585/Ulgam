@@ -36,6 +36,10 @@ enum class MainListRoute(
   Stories(
     label = R.string.ConversationListTabs__stories,
     icon = R.raw.stories_28
+  ),
+  Settings(
+    label = R.string.text_secure_normal__menu_settings,
+    icon = R.raw.chats_28
   );
 
   val isChatsTab: Boolean

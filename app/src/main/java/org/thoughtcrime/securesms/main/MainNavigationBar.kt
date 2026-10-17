@@ -6,6 +6,7 @@
 package org.thoughtcrime.securesms.main
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -74,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import org.signal.core.ui.compose.DayNightPreviews
 import org.signal.core.ui.compose.Previews
 import org.signal.core.ui.compose.theme.SignalTheme
+import org.signal.core.ui.R as CoreUiR
 import org.thoughtcrime.securesms.R
 
 private val NAV_ICON_SIZE = 24.dp
@@ -96,17 +98,32 @@ fun MainNavigationBar(
     if (idx >= 0) idx else 0
   }
 
-  val tabCount = if (state.destinations.isNotEmpty()) state.destinations.size else 3
-  val tabWidth = 320.dp / tabCount
+  var sourceLocation by remember { mutableStateOf(state.currentListLocation) }
+  val sourceIndex = remember(state.destinations, sourceLocation) {
+    val idx = state.destinations.indexOf(sourceLocation)
+    if (idx >= 0) idx else 0
+  }
+
+  val tabCount = if (state.destinations.isNotEmpty()) state.destinations.size else 4
+  val tabWidth = 336.dp / tabCount
+  val targetOffset = tabWidth * selectedIndex
+  val sourceOffset = tabWidth * sourceIndex
+  val threshold = tabWidth.value * 0.45f
 
   val animatedOffsetX by animateDpAsState(
-    targetValue = tabWidth * selectedIndex,
-    animationSpec = spring(
-      dampingRatio = 0.82f,
-      stiffness = Spring.StiffnessMedium
+    targetValue = targetOffset,
+    animationSpec = tween(
+      durationMillis = 280,
+      easing = FastOutSlowInEasing
     ),
-    label = "appleFluidIndicatorOffset"
+    label = "appleFluidIndicatorOffset",
+    finishedListener = {
+      sourceLocation = state.currentListLocation
+    }
   )
+
+  val isArrivedAtTarget = kotlin.math.abs(animatedOffsetX.value - targetOffset.value) < threshold
+  val isNearSource = kotlin.math.abs(animatedOffsetX.value - sourceOffset.value) < threshold
 
   Box(
     modifier = Modifier
@@ -124,7 +141,7 @@ fun MainNavigationBar(
         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
       ),
       modifier = Modifier
-        .width(328.dp)
+        .width(344.dp)
         .height(if (state.compact) 48.dp else 56.dp)
     ) {
       Box(
@@ -154,9 +171,18 @@ fun MainNavigationBar(
               MainListRoute.Chats -> state.chatsCount
               MainListRoute.Calls -> state.callsCount
               MainListRoute.Stories -> state.storiesCount
+              MainListRoute.Settings -> 0
             }
 
-            val selected = state.currentListLocation == destination
+            val isTarget = state.currentListLocation == destination
+            val isSource = sourceLocation == destination
+            val selected = if (isTarget) {
+              isArrivedAtTarget
+            } else if (isSource) {
+              isNearSource
+            } else {
+              false
+            }
 
             NavigationBarTabItem(
               destination = destination,
@@ -190,7 +216,7 @@ private fun NavigationBarTabItem(
 ) {
   val activeContentColor by animateColorAsState(
     targetValue = if (selected) selectedColor else unselectedColor,
-    animationSpec = tween(durationMillis = 180),
+    animationSpec = tween(durationMillis = 140),
     label = "tabContentColor"
   )
 
@@ -362,6 +388,7 @@ private fun BoxScope.NavigationRailCountIndicator(
       MainListRoute.Chats -> state.chatsCount
       MainListRoute.Calls -> state.callsCount
       MainListRoute.Stories -> state.storiesCount
+      MainListRoute.Settings -> 0
     }
   }
 
@@ -396,6 +423,7 @@ private fun NavigationDestinationIcon(
     MainListRoute.Chats, MainListRoute.Archive -> if (selected) R.drawable.symbol_chat_fill_24 else R.drawable.symbol_chat_24
     MainListRoute.Calls -> if (selected) R.drawable.symbol_phone_fill_white_24 else R.drawable.symbol_phone_outline_24
     MainListRoute.Stories -> if (selected) R.drawable.symbol_stories_fill_24 else R.drawable.symbol_stories_24
+    MainListRoute.Settings -> CoreUiR.drawable.symbol_settings_android_24
   }
 
   Icon(

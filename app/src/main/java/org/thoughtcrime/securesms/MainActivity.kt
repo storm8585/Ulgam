@@ -257,7 +257,13 @@ class MainActivity :
 
   private val mainBottomChromeCallback = BottomChromeCallback()
   private val megaphoneActionController = MainMegaphoneActionController()
-  private val mainNavigationCallback: (MainListRoute) -> Unit = { mainNavigationViewModel.onEvent(MainNavigationEvents.GoToTab(it)) }
+  private val mainNavigationCallback: (MainListRoute) -> Unit = {
+    if (it == MainListRoute.Settings) {
+      openSettings.launch(AppSettingsActivity.home(this@MainActivity))
+    } else {
+      mainNavigationViewModel.onEvent(MainNavigationEvents.GoToTab(it))
+    }
+  }
 
   override val googlePayRepository: GooglePayRepository by lazy { GooglePayRepository(this) }
   override val googlePayResultPublisher: Subject<GooglePayComponent.GooglePayResult> = PublishSubject.create()
@@ -383,6 +389,7 @@ class MainActivity :
           MainListRoute.Archive -> toolbarViewModel.presentToolbarForConversationListArchiveFragment()
           MainListRoute.Calls -> toolbarViewModel.presentToolbarForCallLogFragment()
           MainListRoute.Stories -> toolbarViewModel.presentToolbarForStoriesLandingFragment()
+          MainListRoute.Settings -> Unit
         }
       }
 
